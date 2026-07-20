@@ -1,0 +1,5 @@
+aws_region          = "us-east-1"
+environment         = "dev"
+cluster_name        = "shopnow-eks"
+management_key_name = "replace-with-existing-keypair"
+allowed_ssh_cidr    = "0.0.0.0/0"

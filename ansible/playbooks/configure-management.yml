@@ -1,0 +1,68 @@
+---
+- name: Configure ShopNow management host
+  hosts: management
+  become: true
+  gather_facts: true
+
+  tasks:
+  - name: Install base packages on Debian-family systems
+    ansible.builtin.apt:
+      name:
+      - docker.io
+      - curl
+      - unzip
+      - python3-pip
+      state: present
+      update_cache: true
+    when: ansible_os_family == 'Debian'
+
+  - name: Install base packages on RedHat-family systems
+    ansible.builtin.package:
+      name:
+      - docker
+      - curl
+      - unzip
+      - python3-pip
+      state: present
+    when: ansible_os_family in ['RedHat', 'Amazon']
+
+  - name: Enable and start Docker
+    ansible.builtin.service:
+      name: docker
+      state: started
+      enabled: true
+
+  - name: Download kubectl
+    ansible.builtin.get_url:
+      url: https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl
+      dest: /usr/local/bin/kubectl
+      mode: '0755'
+
+  - name: Download AWS CLI bundle
+    ansible.builtin.get_url:
+      url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+      dest: /tmp/awscliv2.zip
+      mode: '0644'
+
+  - name: Unpack AWS CLI bundle
+    ansible.builtin.unarchive:
+      src: /tmp/awscliv2.zip
+      dest: /tmp
+      remote_src: true
+
+  - name: Install AWS CLI
+    ansible.builtin.command: /tmp/aws/install --update
+    changed_when: true
+
+  - name: Configure kubeconfig for EKS when credentials are available
+    become: false
+    ansible.builtin.command:
+      cmd: aws eks update-kubeconfig --region {{ aws_region }} --name {{ eks_cluster_name }}
+    register: kubeconfig_update
+    changed_when: "'Updated context' in kubeconfig_update.stdout or 'Added new context' in kubeconfig_update.stdout"
+    failed_when: false
+
+  - name: Show kubeconfig warning when update failed
+    ansible.builtin.debug:
+      msg: Kubeconfig was not updated. Attach AWS permissions to the EC2 role or provide AWS credentials on the host before Kubernetes deployment.
+    when: kubeconfig_update.rc != 0

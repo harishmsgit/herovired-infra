@@ -1,0 +1,20 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: shopnow-backend-servicemonitor
+  namespace: monitor-ns
+  labels:
+    release: REPLACE_MONITORING_RELEASE
+    app.kubernetes.io/name: shopnow-backend
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  namespaceSelector:
+    matchNames:
+    - shopnow-ns
+  endpoints:
+  - port: metrics
+    path: /api/health
+    interval: 30s
+    scrapeTimeout: 10s

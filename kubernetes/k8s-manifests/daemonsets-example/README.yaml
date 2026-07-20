@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: daemonsets-example-placeholder
+  namespace: shopnow-ns
+data:
+  note: Add daemonset examples here if your deployment needs node-level agents.

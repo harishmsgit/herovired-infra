@@ -1,0 +1,39 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: shopnow-alert-rules
+  namespace: monitor-ns
+  labels:
+    release: REPLACE_MONITORING_RELEASE
+    app.kubernetes.io/name: shopnow
+spec:
+  groups:
+  - name: shopnow-availability
+    rules:
+    - alert: ShopNowBackendTargetDown
+      expr: up{job=~".*shopnow.*|.*backend.*"} == 0
+      for: 2m
+      labels:
+        severity: critical
+        service: shopnow-backend
+      annotations:
+        summary: ShopNow backend target is down
+        description: Prometheus cannot scrape the ShopNow backend target for more than 2 minutes.
+    - alert: ShopNowPodRestartingFrequently
+      expr: increase(kube_pod_container_status_restarts_total{namespace="shopnow-ns"}[15m]) > 3
+      for: 5m
+      labels:
+        severity: warning
+        service: shopnow
+      annotations:
+        summary: ShopNow pod is restarting frequently
+        description: One of the ShopNow containers restarted more than 3 times in the last 15 minutes.
+    - alert: ClusterNodeNotReady
+      expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+      for: 5m
+      labels:
+        severity: critical
+        service: infrastructure
+      annotations:
+        summary: Kubernetes node not ready
+        description: One or more nodes are not Ready for at least 5 minutes.
