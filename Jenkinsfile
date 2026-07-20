@@ -96,7 +96,6 @@ pipeline {
     ANSIBLE_DIR = ''
     INVENTORY_FILE = ''
     TF_OUTPUT_FILE = ''
-    IMAGE_TAG = ''
     INFRA_CHANGED = 'false'
     TERRAFORM_CHANGED = 'false'
     ANSIBLE_CHANGED = 'false'
