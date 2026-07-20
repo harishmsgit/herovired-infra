@@ -134,12 +134,30 @@ pipeline {
             env.IMAGE_TAG = "${env.BUILD_NUMBER}-${sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()}"
           }
 
-          def previousSha = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: env.GIT_PREVIOUS_COMMIT
-          if (!previousSha) {
-            previousSha = sh(script: 'git rev-parse HEAD~1', returnStdout: true).trim()
+          def currentSha = env.GIT_COMMIT?.trim()
+          if (!currentSha) {
+            currentSha = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
           }
-          def changeLog = sh(script: "git diff --name-only ${previousSha} ${env.GIT_COMMIT}", returnStdout: true).trim()
-          def changedFiles = changeLog ? changeLog.split('\n') as List<String> : []
+
+          def previousSha = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT?.trim() ?: env.GIT_PREVIOUS_COMMIT?.trim()
+          if (!previousSha) {
+            previousSha = sh(script: 'git rev-parse --verify HEAD~1 2>/dev/null || true', returnStdout: true).trim()
+          }
+
+          def changedFiles = []
+          if (previousSha) {
+            def changeLog = sh(script: "git diff --name-only ${previousSha} ${currentSha}", returnStdout: true).trim()
+            changedFiles = changeLog ? changeLog.split('\n') as List<String> : []
+          } else {
+            echo 'No previous commit found; treating all relevant infra files as changed for initial run.'
+            changedFiles = [
+              'herovired-infra/terraform/',
+              'terraform/',
+              'herovired-infra/ansible/',
+              'ansible/',
+              'herovired-infra/'
+            ]
+          }
 
           def terraformChanged = changeMatches(changedFiles, ['herovired-infra/terraform/', 'terraform/'])
           def ansibleChanged = changeMatches(changedFiles, ['herovired-infra/ansible/', 'ansible/'])
