@@ -63,6 +63,9 @@ pipeline {
     string(name: 'ECR_REPO_PREFIX', defaultValue: 'shopnow', description: 'ECR repository prefix')
     choice(name: 'ECR_REPOSITORY_STRATEGY', choices: ['service-repos', 'single-repo'], description: 'Use service repositories (<prefix>/frontend) or one shared repository (<repo>:frontend-<tag>)')
     string(name: 'SINGLE_ECR_REPOSITORY', defaultValue: '', description: 'Shared ECR repository name for single-repo mode, for example shopnow-ecr-21-07-2027')
+    string(name: 'FRONTEND_IMAGE_URI', defaultValue: '', description: 'Optional explicit frontend image URI (overrides computed URI)')
+    string(name: 'ADMIN_IMAGE_URI', defaultValue: '', description: 'Optional explicit admin image URI (overrides computed URI)')
+    string(name: 'BACKEND_IMAGE_URI', defaultValue: '', description: 'Optional explicit backend image URI (overrides computed URI)')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Image tag to deploy; defaults to build number and git SHA')
     string(name: 'DEPLOY_FRONTEND', defaultValue: 'false', description: 'Deploy the frontend service')
     string(name: 'DEPLOY_ADMIN', defaultValue: 'false', description: 'Deploy the admin service')
@@ -97,6 +100,9 @@ pipeline {
     ECR_REPO_PREFIX = "${params.ECR_REPO_PREFIX}"
     ECR_REPOSITORY_STRATEGY = "${params.ECR_REPOSITORY_STRATEGY}"
     SINGLE_ECR_REPOSITORY = "${params.SINGLE_ECR_REPOSITORY}"
+    FRONTEND_IMAGE_URI = "${params.FRONTEND_IMAGE_URI}"
+    ADMIN_IMAGE_URI = "${params.ADMIN_IMAGE_URI}"
+    BACKEND_IMAGE_URI = "${params.BACKEND_IMAGE_URI}"
     IMAGE_TAG = "${params.IMAGE_TAG}"
     DEPLOY_FRONTEND = "${params.DEPLOY_FRONTEND}"
     DEPLOY_ADMIN = "${params.DEPLOY_ADMIN}"
@@ -299,13 +305,13 @@ pipeline {
       }
       steps {
         script {
-          def frontendImage = buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'frontend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
-          def adminImage = buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'admin', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
-          def backendImage = buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'backend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+          def frontendImage = env.FRONTEND_IMAGE_URI?.trim() ? env.FRONTEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'frontend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+          def adminImage = env.ADMIN_IMAGE_URI?.trim() ? env.ADMIN_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'admin', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+          def backendImage = env.BACKEND_IMAGE_URI?.trim() ? env.BACKEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'backend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
 
-          echo "Frontend image URI: ${frontendImage}"
-          echo "Admin image URI: ${adminImage}"
-          echo "Backend image URI: ${backendImage}"
+          echo "Frontend image URI: ${frontendImage} (source: ${env.FRONTEND_IMAGE_URI?.trim() ? 'explicit' : 'computed'})"
+          echo "Admin image URI: ${adminImage} (source: ${env.ADMIN_IMAGE_URI?.trim() ? 'explicit' : 'computed'})"
+          echo "Backend image URI: ${backendImage} (source: ${env.BACKEND_IMAGE_URI?.trim() ? 'explicit' : 'computed'})"
 
           ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
             sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}'
