@@ -43,6 +43,9 @@ def buildPipelineContext(script) {
   def awsAccountId = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'AWS_ACCOUNT_ID', '495013583028') : (script.params.AWS_ACCOUNT_ID?.trim() ?: script.env.AWS_ACCOUNT_ID?.trim())
   def awsRegion = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'AWS_REGION', 'ap-south-1') : (script.params.AWS_REGION?.trim() ?: script.env.AWS_REGION?.trim())
   def ecrRepoPrefix = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'ECR_REPO_PREFIX', 'shopnow') : (script.params.ECR_REPO_PREFIX?.trim() ?: script.env.ECR_REPO_PREFIX?.trim())
+  def ecrRepositoryStrategy = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'ECR_REPOSITORY_STRATEGY', 'service-repos') : (script.params.ECR_REPOSITORY_STRATEGY?.trim() ?: script.env.ECR_REPOSITORY_STRATEGY?.trim() ?: 'service-repos')
+  def singleEcrRepository = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'SINGLE_ECR_REPOSITORY', '') : (script.params.SINGLE_ECR_REPOSITORY?.trim() ?: script.env.SINGLE_ECR_REPOSITORY?.trim())
+  def ecrImageTagMutability = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'ECR_IMAGE_TAG_MUTABILITY', 'MUTABLE') : (script.params.ECR_IMAGE_TAG_MUTABILITY?.trim() ?: script.env.ECR_IMAGE_TAG_MUTABILITY?.trim() ?: 'MUTABLE')
   def userName = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'USER_NAME', 'harish') : (script.params.USER_NAME?.trim() ?: script.env.USER_NAME?.trim() ?: 'aryan')
   def k8sNamespace = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'K8S_NAMESPACE', 'shopnow-ns') : (script.params.K8S_NAMESPACE?.trim() ?: script.env.K8S_NAMESPACE?.trim())
   def monitoringNamespace = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'MONITORING_NAMESPACE', 'monitor-ns') : (script.params.MONITORING_NAMESPACE?.trim() ?: script.env.MONITORING_NAMESPACE?.trim())
@@ -108,13 +111,19 @@ def buildPipelineContext(script) {
   }
 
   def serviceImages = serviceMatrix(userName).collectEntries { service ->
-    [(service.name): "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/${ecrRepoPrefix}/${service.repoSuffix}:${imageTag}"]
+    def imageUri = ecrRepositoryStrategy == 'single-repo' || singleEcrRepository ?
+      "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/${singleEcrRepository ?: ecrRepoPrefix}:${service.repoSuffix}-${imageTag}" :
+      "${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com/${ecrRepoPrefix}/${service.repoSuffix}:${imageTag}"
+    [(service.name): imageUri]
   }
 
   return [
     awsAccountId: awsAccountId,
     awsRegion: awsRegion,
     ecrRepoPrefix: ecrRepoPrefix,
+    ecrRepositoryStrategy: ecrRepositoryStrategy,
+    singleEcrRepository: singleEcrRepository,
+    ecrImageTagMutability: ecrImageTagMutability,
     userName: userName,
     k8sNamespace: k8sNamespace,
     monitoringNamespace: monitoringNamespace,
@@ -133,6 +142,9 @@ def applyPipelineContext(script, ctx) {
   script.env.AWS_ACCOUNT_ID = ctx.awsAccountId
   script.env.AWS_REGION = ctx.awsRegion
   script.env.ECR_REPO_PREFIX = ctx.ecrRepoPrefix
+  script.env.ECR_REPOSITORY_STRATEGY = ctx.ecrRepositoryStrategy
+  script.env.SINGLE_ECR_REPOSITORY = ctx.singleEcrRepository ?: ''
+  script.env.ECR_IMAGE_TAG_MUTABILITY = ctx.ecrImageTagMutability
   script.env.USER_NAME = ctx.userName
   script.env.K8S_NAMESPACE = ctx.k8sNamespace ?: script.env.K8S_NAMESPACE
   script.env.MONITORING_NAMESPACE = ctx.monitoringNamespace ?: script.env.MONITORING_NAMESPACE
@@ -206,6 +218,9 @@ pipeline {
     string(name: 'AWS_ACCOUNT_ID', defaultValue: '495013583028', description: 'AWS account ID for ECR registry')
     string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'awsId', description: 'Jenkins AWS credentials ID')
     string(name: 'ECR_REPO_PREFIX', defaultValue: 'shopnow', description: 'ECR repository prefix, for example <your-username>-shopnow')
+    choice(name: 'ECR_REPOSITORY_STRATEGY', choices: ['service-repos', 'single-repo'], description: 'Use service repositories (<prefix>/frontend) or one shared repository (<repo>:frontend-<tag>)')
+    string(name: 'SINGLE_ECR_REPOSITORY', defaultValue: '', description: 'Shared ECR repository for single-repo mode, for example shopnow-ecr-21-07-2027')
+    choice(name: 'ECR_IMAGE_TAG_MUTABILITY', choices: ['MUTABLE', 'IMMUTABLE'], description: 'Tag mutability to use when creating ECR repositories')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Docker image tag; defaults to BUILD_NUMBER-gitsha')
     string(name: 'USER_NAME', defaultValue: 'harish', description: 'Frontend and admin build arg used for public path customization')
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name')
@@ -231,6 +246,9 @@ pipeline {
     AWS_REGION = "${params.AWS_REGION}"
     AWS_ACCOUNT_ID = "${params.AWS_ACCOUNT_ID}"
     ECR_REPO_PREFIX = "${params.ECR_REPO_PREFIX}"
+    ECR_REPOSITORY_STRATEGY = "${params.ECR_REPOSITORY_STRATEGY}"
+    SINGLE_ECR_REPOSITORY = "${params.SINGLE_ECR_REPOSITORY}"
+    ECR_IMAGE_TAG_MUTABILITY = "${params.ECR_IMAGE_TAG_MUTABILITY}"
     USER_NAME = "${params.USER_NAME}"
     EKS_CLUSTER_NAME = "${params.EKS_CLUSTER_NAME}"
     K8S_NAMESPACE = "${params.K8S_NAMESPACE}"
@@ -336,19 +354,34 @@ pipeline {
           applyPipelineContext(this, ctx)
 
           withAwsCredentials(params.AWS_CREDENTIALS_ID) {
-            for (service in serviceMatrix(ctx.userName)) {
-              def repoName = "${ctx.ecrRepoPrefix}/${service.repoSuffix}"
+            if (ctx.ecrRepositoryStrategy == 'single-repo' || ctx.singleEcrRepository) {
+              def repoName = ctx.singleEcrRepository ?: ctx.ecrRepoPrefix
               sh """
                 if aws ecr describe-repositories --repository-names ${repoName} --region ${AWS_REGION} >/dev/null 2>&1; then
                   echo "ECR repository already exists: ${repoName}"
                 else
-                  aws ecr create-repository \\
-                    --repository-name ${repoName} \\
-                    --region ${AWS_REGION} \\
-                    --image-tag-mutability IMMUTABLE \\
+                  aws ecr create-repository \
+                    --repository-name ${repoName} \
+                    --region ${AWS_REGION} \
+                    --image-tag-mutability ${ctx.ecrImageTagMutability} \
                     --image-scanning-configuration scanOnPush=true
                 fi
               """
+            } else {
+              for (service in serviceMatrix(ctx.userName)) {
+                def repoName = "${ctx.ecrRepoPrefix}/${service.repoSuffix}"
+                sh """
+                  if aws ecr describe-repositories --repository-names ${repoName} --region ${AWS_REGION} >/dev/null 2>&1; then
+                    echo "ECR repository already exists: ${repoName}"
+                  else
+                    aws ecr create-repository \
+                      --repository-name ${repoName} \
+                      --region ${AWS_REGION} \
+                      --image-tag-mutability ${ctx.ecrImageTagMutability} \
+                      --image-scanning-configuration scanOnPush=true
+                  fi
+                """
+              }
             }
           }
         }

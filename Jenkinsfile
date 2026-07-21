@@ -38,6 +38,19 @@ def ensureAwsCredentials(script, String credentialsId, Closure body) {
   }
 }
 
+def buildImageUri(String accountId, String region, String repoPrefix, String serviceName, String imageTag, String repositoryStrategy, String singleRepository) {
+  def registry = "${accountId}.dkr.ecr.${region}.amazonaws.com"
+  def strategy = repositoryStrategy?.trim()
+  def sharedRepo = singleRepository?.trim()
+
+  if (strategy == 'single-repo' || sharedRepo) {
+    def repoName = sharedRepo ?: repoPrefix
+    return "${registry}/${repoName}:${serviceName}-${imageTag}"
+  }
+
+  return "${registry}/${repoPrefix}/${serviceName}:${imageTag}"
+}
+
 pipeline {
   agent any
 
@@ -48,6 +61,8 @@ pipeline {
     string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name')
     string(name: 'ECR_REPO_PREFIX', defaultValue: 'shopnow', description: 'ECR repository prefix')
+    choice(name: 'ECR_REPOSITORY_STRATEGY', choices: ['service-repos', 'single-repo'], description: 'Use service repositories (<prefix>/frontend) or one shared repository (<repo>:frontend-<tag>)')
+    string(name: 'SINGLE_ECR_REPOSITORY', defaultValue: '', description: 'Shared ECR repository name for single-repo mode, for example shopnow-ecr-21-07-2027')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Image tag to deploy; defaults to build number and git SHA')
     string(name: 'DEPLOY_FRONTEND', defaultValue: 'false', description: 'Deploy the frontend service')
     string(name: 'DEPLOY_ADMIN', defaultValue: 'false', description: 'Deploy the admin service')
@@ -80,6 +95,8 @@ pipeline {
     LOCK_TABLE = "${params.LOCK_TABLE}"
     EKS_CLUSTER_NAME = "${params.EKS_CLUSTER_NAME}"
     ECR_REPO_PREFIX = "${params.ECR_REPO_PREFIX}"
+    ECR_REPOSITORY_STRATEGY = "${params.ECR_REPOSITORY_STRATEGY}"
+    SINGLE_ECR_REPOSITORY = "${params.SINGLE_ECR_REPOSITORY}"
     IMAGE_TAG = "${params.IMAGE_TAG}"
     DEPLOY_FRONTEND = "${params.DEPLOY_FRONTEND}"
     DEPLOY_ADMIN = "${params.DEPLOY_ADMIN}"
@@ -282,31 +299,39 @@ pipeline {
       }
       steps {
         script {
+          def frontendImage = buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'frontend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+          def adminImage = buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'admin', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+          def backendImage = buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'backend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+
+          echo "Frontend image URI: ${frontendImage}"
+          echo "Admin image URI: ${adminImage}"
+          echo "Backend image URI: ${backendImage}"
+
           ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
             sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}'
           }
 
           sh 'kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
-          sh 'kubectl apply -f herovired-infra/kubernetes/k8s-manifests/namespace/'
-          sh 'kubectl apply -f herovired-infra/kubernetes/k8s-manifests/database/'
+          sh "sed -e 's|name: shopnow-ns|name: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/namespace/namespace.yaml | kubectl apply -f -"
+          sh "for file in herovired-infra/kubernetes/k8s-manifests/database/*.yaml; do sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' \"$file\" | kubectl apply -f -; done"
 
           def deployTasks = [:]
           if (env.DEPLOY_FRONTEND == 'true') {
             deployTasks.frontend = {
-              sh "sed 's|REPLACE_FRONTEND_IMAGE|${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_PREFIX}/frontend:${IMAGE_TAG}|g' herovired-infra/kubernetes/k8s-manifests/frontend/deployment.yaml | kubectl apply -f -"
-              sh 'kubectl apply -f herovired-infra/kubernetes/k8s-manifests/frontend/service.yaml'
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_FRONTEND_IMAGE|${frontendImage}|g' herovired-infra/kubernetes/k8s-manifests/frontend/deployment.yaml | kubectl apply -f -"
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/frontend/service.yaml | kubectl apply -f -"
             }
           }
           if (env.DEPLOY_ADMIN == 'true') {
             deployTasks.admin = {
-              sh "sed 's|REPLACE_ADMIN_IMAGE|${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_PREFIX}/admin:${IMAGE_TAG}|g' herovired-infra/kubernetes/k8s-manifests/admin/deployment.yaml | kubectl apply -f -"
-              sh 'kubectl apply -f herovired-infra/kubernetes/k8s-manifests/admin/service.yaml'
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_ADMIN_IMAGE|${adminImage}|g' herovired-infra/kubernetes/k8s-manifests/admin/deployment.yaml | kubectl apply -f -"
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/admin/service.yaml | kubectl apply -f -"
             }
           }
           if (env.DEPLOY_BACKEND == 'true') {
             deployTasks.backend = {
-              sh "sed 's|REPLACE_BACKEND_IMAGE|${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_PREFIX}/backend:${IMAGE_TAG}|g' herovired-infra/kubernetes/k8s-manifests/backend/deployment.yaml | kubectl apply -f -"
-              sh 'kubectl apply -f herovired-infra/kubernetes/k8s-manifests/backend/service.yaml'
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_BACKEND_IMAGE|${backendImage}|g' herovired-infra/kubernetes/k8s-manifests/backend/deployment.yaml | kubectl apply -f -"
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/backend/service.yaml | kubectl apply -f -"
             }
           }
 
@@ -316,12 +341,30 @@ pipeline {
             parallel deployTasks
           }
 
-          sh 'kubectl apply -f herovired-infra/kubernetes/k8s-manifests/ingress/ingress-shopnow.yaml'
+          sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/ingress/ingress-shopnow.yaml | kubectl apply -f -"
+
+          sh 'kubectl rollout status deployment/mongo -n ${K8S_NAMESPACE} --timeout=5m'
+          if (env.DEPLOY_FRONTEND == 'true') {
+            sh 'kubectl rollout status deployment/frontend -n ${K8S_NAMESPACE} --timeout=5m'
+          }
+          if (env.DEPLOY_ADMIN == 'true') {
+            sh 'kubectl rollout status deployment/admin -n ${K8S_NAMESPACE} --timeout=5m'
+          }
+          if (env.DEPLOY_BACKEND == 'true') {
+            sh 'kubectl rollout status deployment/backend -n ${K8S_NAMESPACE} --timeout=5m'
+          }
 
           if (params.ENABLE_MONITORING_CHECKS) {
             sh 'kubectl create namespace ${MONITORING_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
-            sh 'kubectl apply -f herovired-infra/kubernetes/monitoring/'
+            sh "for file in herovired-infra/kubernetes/monitoring/*.yaml; do sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\\\"shopnow-ns\\\"|namespace=\\\"${K8S_NAMESPACE}\\\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' \"$file\" | kubectl apply -f -; done"
+            sh 'kubectl get pods -n ${MONITORING_NAMESPACE}'
+            sh 'kubectl get servicemonitor -n ${MONITORING_NAMESPACE} || true'
+            sh 'kubectl get prometheusrule -n ${MONITORING_NAMESPACE} || true'
           }
+
+          sh 'kubectl get pods -n ${K8S_NAMESPACE} -o wide'
+          sh 'kubectl get svc -n ${K8S_NAMESPACE}'
+          sh 'kubectl get ingress -n ${K8S_NAMESPACE} || true'
         }
       }
     }
