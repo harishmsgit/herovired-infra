@@ -81,3 +81,9 @@ variable "node_max_size" {
   type        = number
   default     = 3
 }
+
+variable "ecr_repo_prefix" {
+  description = "ECR repository prefix used for application images"
+  type        = string
+  default     = "shopnow"
+}
