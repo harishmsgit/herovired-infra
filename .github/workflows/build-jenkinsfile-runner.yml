@@ -13,6 +13,8 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    outputs:
+      image_uri: ${{ steps.image-info.outputs.image_uri }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,5 +58,9 @@ jobs:
             ${{ steps.ensure-ecr.outputs.repository_uri }}:${{ github.sha }}
 
       - name: Image info
+        id: image-info
         run: |
-          echo "Image pushed: ${{ steps.ensure-ecr.outputs.repository_uri }}:latest"
+          IMAGE_URI="${{ steps.ensure-ecr.outputs.repository_uri }}:latest"
+          echo "ECR image URI: $IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "### ECR image URI\n$IMAGE_URI" >> $GITHUB_STEP_SUMMARY

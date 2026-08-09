@@ -29,6 +29,8 @@ $env:AWS_ACCOUNT_ID='123456789012'
 .\scripts\set_github_secrets.ps1 -Repository owner/repo
 ```
 
+> If you install `gh` during this session, restart PowerShell or open a new terminal so `gh` is available.
+
 3) Trigger the workflow (manual):
 
 ```bash
@@ -36,6 +38,8 @@ $env:AWS_ACCOUNT_ID='123456789012'
 gh workflow run build-jenkinsfile-runner.yml --ref main
 # Or visit Actions → Build and Publish Jenkinsfile Runner Image → Run workflow
 ```
+
+> On success, the workflow reports the published ECR image URI in the run summary.
 
 Notes:
 - The workflow `build-jenkinsfile-runner.yml` already contains `workflow_dispatch:` so it can be run manually.
