@@ -1,5 +1,17 @@
+// Load shared Jenkins helper library if available.  
+// Checks both repository-root `jenkins/` and `herovired-infra/jenkins/` paths
+// so the pipeline works whether it's executed from the monorepo root
+// or when the infra is checked out under a subdirectory.
 def loadSharedInfra(script) {
-  def support = script.fileExists('herovired-infra/jenkins/common.groovy') ? script.load('herovired-infra/jenkins/common.groovy') : null
+  def candidates = ['jenkins/common.groovy', 'herovired-infra/jenkins/common.groovy']
+  def support = null
+  for (p in candidates) {
+    if (script.fileExists(p)) {
+      support = script.load(p)
+      break
+    }
+  }
+
   def config = support ? support.readCommonEnv(script) : [:]
   return [support: support, config: config]
 }
@@ -67,9 +79,9 @@ pipeline {
     string(name: 'ADMIN_IMAGE_URI', defaultValue: '', description: 'Optional explicit admin image URI (overrides computed URI)')
     string(name: 'BACKEND_IMAGE_URI', defaultValue: '', description: 'Optional explicit backend image URI (overrides computed URI)')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Image tag to deploy; defaults to build number and git SHA')
-    string(name: 'DEPLOY_FRONTEND', defaultValue: 'false', description: 'Deploy the frontend service')
-    string(name: 'DEPLOY_ADMIN', defaultValue: 'false', description: 'Deploy the admin service')
-    string(name: 'DEPLOY_BACKEND', defaultValue: 'false', description: 'Deploy the backend service')
+    booleanParam(name: 'DEPLOY_FRONTEND', defaultValue: false, description: 'Deploy the frontend service')
+    booleanParam(name: 'DEPLOY_ADMIN', defaultValue: false, description: 'Deploy the admin service')
+    booleanParam(name: 'DEPLOY_BACKEND', defaultValue: false, description: 'Deploy the backend service')
     string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'awsId', description: 'Jenkins AWS credentials ID')
     string(name: 'SSH_PRIVATE_KEY_CREDENTIALS_ID', defaultValue: 'management-ec2-ssh-key', description: 'SSH private key credentials for the management EC2 instance')
     string(name: 'REMOTE_USER', defaultValue: 'ubuntu', description: 'SSH user for the management EC2 instance')
@@ -81,6 +93,7 @@ pipeline {
     string(name: 'MONITORING_RELEASE_NAME', defaultValue: 'prometheus', description: 'Monitoring release name')
     string(name: 'GRAFANA_ADMIN_PASSWORD', defaultValue: 'dev-grafana-admin', description: 'Grafana admin password')
     booleanParam(name: 'ENABLE_MONITORING_CHECKS', defaultValue: true, description: 'Apply monitoring manifests and verify monitoring health')
+    booleanParam(name: 'AUTO_INSTALL_CLI_TOOLS', defaultValue: false, description: 'If true, attempt to auto-install missing CLI tools (kubectl/helm/aws) on the agent')
   }
 
   options {
@@ -208,11 +221,173 @@ pipeline {
       }
     }
 
+    stage('Ensure CLI Tools') {
+      steps {
+        script {
+          sh '''
+            set -euo pipefail
+            missing=""
+            for cmd in kubectl helm aws; do
+              if ! command -v $cmd >/dev/null 2>&1; then
+                missing="$missing $cmd"
+              fi
+            done
+
+            if [ -z "$missing" ]; then
+              echo "All required CLI tools present: kubectl helm aws"
+              exit 0
+            fi
+
+            echo "Missing CLI tools:$missing"
+            if [ "${AUTO_INSTALL_CLI_TOOLS}" != 'true' ]; then
+              echo "Set parameter AUTO_INSTALL_CLI_TOOLS=true to attempt automatic installation, or install manually with the commands below."
+              echo "kubectl: https://kubernetes.io/docs/tasks/tools/"
+              echo "helm: https://helm.sh/docs/intro/install/"
+              echo "awscli: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+              exit 1
+            fi
+
+            echo "AUTO_INSTALL_CLI_TOOLS=true — attempting best-effort installation (requires sudo)"
+
+            if [ -f /etc/debian_version ]; then
+              sudo apt-get update -y || true
+              sudo apt-get install -y ca-certificates curl unzip || true
+
+              for cmd in $missing; do
+                case $cmd in
+                  kubectl)
+                    KUBECTL_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+                    curl -LO "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
+                    sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl || true
+                    ;;
+                  helm)
+                    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
+                    ;;
+                  aws)
+                    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip || true
+                    unzip -o /tmp/awscliv2.zip -d /tmp || true
+                    sudo /tmp/aws/install || true
+                    ;;
+                esac
+              done
+
+            elif [ -f /etc/redhat-release ]; then
+              sudo yum install -y curl unzip || true
+              for cmd in $missing; do
+                case $cmd in
+                  kubectl)
+                    KUBECTL_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+                    curl -LO "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
+                    sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl || true
+                    ;;
+                  helm)
+                    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
+                    ;;
+                  aws)
+                    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip || true
+                    unzip -o /tmp/awscliv2.zip -d /tmp || true
+                    sudo /tmp/aws/install || true
+                    ;;
+                esac
+              done
+
+            else
+              echo "Unknown OS - automatic install not supported on this agent. Install kubectl/helm/aws manually."
+              exit 1
+            fi
+
+            # Re-check
+            for cmd in kubectl helm aws; do
+              if ! command -v $cmd >/dev/null 2>&1; then
+                echo "$cmd still missing after attempted install"
+                exit 1
+              fi
+            done
+            echo "CLI tools installed/available"
+          '''
+        }
+      }
+    }
+    
+    stage('Preflight Checks') {
+      steps {
+        script {
+          sh '''
+            set -e
+            if command -v ansible-lint >/dev/null 2>&1; then
+              echo 'Running ansible-lint...'
+              ansible-lint herovired-infra/ansible || true
+            else
+              echo 'ansible-lint not found; skipping'
+            fi
+
+            if command -v ansible-playbook >/dev/null 2>&1; then
+              echo 'Checking ansible syntax...'
+              ansible-playbook --syntax-check herovired-infra/ansible/playbooks/configure-management.yml || true
+            else
+              echo 'ansible-playbook not found; skipping syntax check'
+            fi
+
+            if command -v kubectl >/dev/null 2>&1; then
+              echo 'Running kubectl dry-run for k8s manifests...'
+              find herovired-infra/kubernetes/k8s-manifests -name '*.yaml' -print0 | xargs -0 -n1 -I{} kubectl apply --dry-run=client -f {} || true
+            else
+              echo 'kubectl not found; skipping k8s dry-run'
+            fi
+
+            if command -v kubeval >/dev/null 2>&1; then
+              echo 'Running kubeval...'
+              kubeval herovired-infra/kubernetes/k8s-manifests || true
+            else
+              echo 'kubeval not found; skipping'
+            fi
+          '''
+        }
+      }
+    }
+
     stage('Validate AWS Access') {
       steps {
         script {
           ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
             sh 'aws sts get-caller-identity --region ${AWS_REGION}'
+          }
+        }
+      }
+    }
+
+    stage('Verify Images') {
+      when {
+        expression { return params.RUN_DEPLOYMENT && (params.DEPLOY_FRONTEND || params.DEPLOY_ADMIN || params.DEPLOY_BACKEND) }
+      }
+      steps {
+        script {
+          def checks = []
+          if (params.DEPLOY_FRONTEND) {
+            def img = env.FRONTEND_IMAGE_URI?.trim() ? env.FRONTEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'frontend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+            checks << [name: 'frontend', uri: img]
+          }
+          if (params.DEPLOY_ADMIN) {
+            def img = env.ADMIN_IMAGE_URI?.trim() ? env.ADMIN_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'admin', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+            checks << [name: 'admin', uri: img]
+          }
+          if (params.DEPLOY_BACKEND) {
+            def img = env.BACKEND_IMAGE_URI?.trim() ? env.BACKEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'backend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+            checks << [name: 'backend', uri: img]
+          }
+
+          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+            checks.each { c ->
+              echo "Verifying image for ${c.name}: ${c.uri}"
+              if (c.uri.contains('.dkr.ecr.')) {
+                def parts = c.uri.tokenize(':')
+                def tag = parts[-1]
+                def repoPath = c.uri.substring(c.uri.indexOf('/') + 1, c.uri.lastIndexOf(':'))
+                sh "aws ecr describe-images --region ${AWS_REGION} --repository-name ${repoPath} --image-ids imageTag=${tag}"
+              } else {
+                echo "Skipping non-ECR image ${c.uri}"
+              }
+            }
           }
         }
       }
@@ -255,6 +430,46 @@ pipeline {
               '''
             }
           }
+        }
+      }
+    }
+
+    stage('Provision Secrets') {
+      when {
+        expression { return params.RUN_ANSIBLE_AFTER_APPLY && env.TERRAFORM_CHANGED == 'true' }
+      }
+      steps {
+        script {
+          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+            sh "$WORKSPACE/herovired-infra/scripts/create_aws_secret.sh shopnow/mongo ${AWS_REGION}"
+          }
+        }
+      }
+    }
+
+    stage('Verify ExternalSecret Sync') {
+      when {
+        expression { return params.RUN_ANSIBLE_AFTER_APPLY && env.TERRAFORM_CHANGED == 'true' }
+      }
+      steps {
+        script {
+          sh '''
+            set -e
+            # wait for ExternalSecret to create the k8s secret (timeout 120s)
+            for i in $(seq 1 24); do
+              if kubectl get secret mongo-secret -n shopnow-ns >/dev/null 2>&1; then
+                echo 'Found k8s secret mongo-secret'
+                kubectl get secret mongo-secret -n shopnow-ns -o jsonpath='{.data.MONGODB_URI}' | base64 --decode >/tmp/mongo_uri || true
+                if [ -s /tmp/mongo_uri ]; then
+                  echo 'mongo-secret contains MONGODB_URI'
+                  exit 0
+                fi
+              fi
+              sleep 5
+            done
+            echo 'ExternalSecret did not sync within timeout' >&2
+            exit 1
+          '''
         }
       }
     }

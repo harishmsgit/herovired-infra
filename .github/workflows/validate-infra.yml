@@ -1,0 +1,102 @@
+name: Validate Infra
+
+on:
+  pull_request:
+  push:
+    paths:
+      - 'terraform/**'
+      - 'ansible/**'
+      - 'kubernetes/**'
+      - 'scripts/**'
+      - 'Jenkinsfile'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install ansible-lint and yamllint
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-lint yamllint
+
+      - name: Run ansible-lint
+        run: |
+          if [ -d "ansible" ]; then
+            ansible-lint ansible || true
+          else
+            echo "No ansible directory, skipping ansible-lint"
+          fi
+
+      - name: Run yamllint for k8s manifests
+        run: |
+          if [ -d "kubernetes/k8s-manifests" ]; then
+            yamllint -c /dev/null kubernetes/k8s-manifests || true
+          else
+            echo "No k8s-manifests dir, skipping yamllint"
+          fi
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.7
+
+      - name: Terraform validate
+        run: |
+          if [ -d "terraform" ]; then
+            cd terraform
+            terraform init -backend=false
+            terraform validate
+          else
+            echo "No terraform dir, skipping terraform validate"
+          fi
+
+      - name: Install kubeval
+        run: |
+          KUV_VER=$(curl -s https://api.github.com/repos/instrumenta/kubeval/releases/latest | jq -r .tag_name)
+          curl -sL "https://github.com/instrumenta/kubeval/releases/download/${KUV_VER}/kubeval-linux-amd64.tar.gz" -o /tmp/kubeval.tar.gz
+          sudo tar -C /usr/local/bin -xzf /tmp/kubeval.tar.gz kubeval
+          kubeval --version || true
+        env:
+          KUBEVERSION: 'latest'
+
+      - name: Run kubeval on manifests
+        run: |
+          if [ -d "kubernetes/k8s-manifests" ]; then
+            find kubernetes/k8s-manifests -name '*.yaml' -print0 | xargs -0 -n1 kubeval || true
+          else
+            echo "No k8s manifests directory, skipping kubeval"
+          fi
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck on scripts
+        run: |
+          if [ -d "scripts" ]; then
+            find scripts -type f -name '*.sh' -print0 | xargs -0 shellcheck || true
+          else
+            echo "No scripts dir, skipping shellcheck"
+          fi
+
+      - name: Jenkinsfile lint guidance
+        run: |
+          if [ -f Jenkinsfile ]; then
+            echo "Building custom jenkinsfile-runner image with plugins..."
+            docker build -t local/jfr:latest -f docker/jenkinsfile-runner/Dockerfile docker/jenkinsfile-runner
+            echo "Running jenkinsfile-runner to validate Jenkinsfile..."
+            docker run --rm -v "$PWD":/workspace -w /workspace local/jfr:latest || {
+              echo "jenkinsfile-runner reported issues; failing job"; exit 1;
+            }
+          else
+            echo "No Jenkinsfile found in repo; skipping Jenkinsfile lint"
+          fi

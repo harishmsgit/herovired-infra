@@ -1,0 +1,43 @@
+# CI Setup — GitHub Actions secrets and triggering
+
+Prerequisites:
+- `gh` (GitHub CLI) installed and authenticated (`gh auth login`).
+
+1) Add repository secrets (bash):
+
+```bash
+# interactive prompt or provide env vars
+GITHUB_REPO=owner/repo ./scripts/set_github_secrets.sh
+# or non-interactive
+AWS_ACCESS_KEY_ID=AKIA... \ 
+AWS_SECRET_ACCESS_KEY=... \ 
+AWS_REGION=eu-west-1 \ 
+AWS_ACCOUNT_ID=123456789012 \ 
+./scripts/set_github_secrets.sh
+```
+
+2) Add repository secrets (PowerShell):
+
+```powershell
+# interactive
+.\scripts\set_github_secrets.ps1 -Repository owner/repo
+# non-interactive (from PowerShell env)
+$env:AWS_ACCESS_KEY_ID='AKIA...'
+$env:AWS_SECRET_ACCESS_KEY='...'
+$env:AWS_REGION='eu-west-1'
+$env:AWS_ACCOUNT_ID='123456789012'
+.\scripts\set_github_secrets.ps1 -Repository owner/repo
+```
+
+3) Trigger the workflow (manual):
+
+```bash
+# Run from the repo root
+gh workflow run build-jenkinsfile-runner.yml --ref main
+# Or visit Actions → Build and Publish Jenkinsfile Runner Image → Run workflow
+```
+
+Notes:
+- The workflow `build-jenkinsfile-runner.yml` already contains `workflow_dispatch:` so it can be run manually.
+- Ensure the branch/ref you pass to `gh workflow run` exists (e.g., `main` or `master`).
+- The secrets required are: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ACCOUNT_ID`.
