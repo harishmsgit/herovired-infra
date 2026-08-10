@@ -2,6 +2,12 @@
 
 Prerequisites:
 - `gh` (GitHub CLI) installed and authenticated (`gh auth login`).
+- On Windows, add `C:\Program Files\GitHub CLI` to your `PATH` environment variable and reopen PowerShell if `gh` is not recognized.
+
+  Example PowerShell command:
+  ```powershell
+  [Environment]::SetEnvironmentVariable('PATH', "$env:PATH;C:\Program Files\GitHub CLI", 'User')
+  ```
 
 1) Add repository secrets (bash):
 

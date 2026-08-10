@@ -18,6 +18,7 @@ This repo includes GitHub Actions workflows and helper scripts for building a cu
 - Use Bash on Linux/macOS or WSL for Bash examples
 - Use PowerShell for Windows PowerShell examples
 - The GitHub CLI commands shown work in both shells once `gh` is installed
+- On Windows, add `C:\Program Files\GitHub CLI` to your `PATH` if `gh` is not recognized.
 
 ## Required GitHub repository secrets
 - `AWS_ACCESS_KEY_ID`
