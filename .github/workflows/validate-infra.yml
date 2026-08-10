@@ -95,7 +95,7 @@ jobs:
         run: |
           if [ -f Jenkinsfile ]; then
             echo "Building custom jenkinsfile-runner image with plugins..."
-            docker build --pull -t local/jfr:latest -f docker/jenkinsfile-runner/Dockerfile docker/jenkinsfile-runner
+            docker build --pull --no-cache -t local/jfr:latest -f docker/jenkinsfile-runner/Dockerfile docker/jenkinsfile-runner
             echo "Running jenkinsfile-runner to validate Jenkinsfile (timeout 20m)..."
             # Run lint with timeout and capture output to a log file so the job cannot hang indefinitely
             /usr/bin/timeout 20m docker run --rm -v "$PWD":/workspace -w /workspace local/jfr:latest lint > jenkinsfile-lint.log 2>&1 || {
