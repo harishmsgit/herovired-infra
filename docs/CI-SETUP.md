@@ -57,3 +57,5 @@ Remote Jenkinsfile validation example:
 ```bash
 gh workflow run validate-infra.yml --ref main
 ```
+
+Note: The validate workflow uploads Jenkinsfile lint output as an artifact named `jenkinsfile-lint-log`. If the runner cannot download the Jenkins WAR, the lint step is non-blocking and the log artifact contains details.

@@ -78,6 +78,8 @@ If Docker is unavailable locally, validate the Jenkinsfile and infra checks remo
 gh workflow run validate-infra.yml --ref main
 ```
 
+Note: Jenkinsfile lint runs in the workflow but may be non-blocking if the runner cannot download Jenkins during execution. The lint output is always uploaded as an artifact named `jenkinsfile-lint-log` when present.
+
 ## Action developer checklist
 1. Confirm the workflow file is committed and pushed to `main`.
 2. Add `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `AWS_ACCOUNT_ID` as repository secrets.
