@@ -13,6 +13,7 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,11 +93,16 @@ jobs:
         run: |
           if [ -f Jenkinsfile ]; then
             echo "Building custom jenkinsfile-runner image with plugins..."
-            docker build -t local/jfr:latest -f docker/jenkinsfile-runner/Dockerfile docker/jenkinsfile-runner
-            echo "Running jenkinsfile-runner to validate Jenkinsfile..."
-            docker run --rm -v "$PWD":/workspace -w /workspace local/jfr:latest || {
-              echo "jenkinsfile-runner reported issues; failing job"; exit 1;
+            docker build --pull -t local/jfr:latest -f docker/jenkinsfile-runner/Dockerfile docker/jenkinsfile-runner
+            echo "Running jenkinsfile-runner to validate Jenkinsfile (timeout 20m)..."
+            # Run lint with timeout and capture output to a log file so the job cannot hang indefinitely
+            /usr/bin/timeout 20m docker run --rm -v "$PWD":/workspace -w /workspace local/jfr:latest lint > jenkinsfile-lint.log 2>&1 || {
+              echo "jenkinsfile-runner reported issues or timed out; showing lint output (first 200 lines):";
+              sed -n '1,200p' jenkinsfile-lint.log || true;
+              echo "Failing job due to Jenkinsfile lint failure or timeout.";
+              exit 1;
             }
+            echo "Jenkinsfile lint succeeded."
           else
             echo "No Jenkinsfile found in repo; skipping Jenkinsfile lint"
           fi
