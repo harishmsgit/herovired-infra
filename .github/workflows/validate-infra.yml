@@ -9,6 +9,7 @@ on:
       - 'kubernetes/**'
       - 'scripts/**'
       - 'Jenkinsfile'
+  workflow_dispatch:
 
 jobs:
   validate:
