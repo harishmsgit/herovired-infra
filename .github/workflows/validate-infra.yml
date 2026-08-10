@@ -106,6 +106,13 @@ jobs:
             echo "No Jenkinsfile found in repo; skipping Jenkinsfile lint"
           fi
 
+      - name: Ensure jenkinsfile-lint.log exists
+        if: always()
+        run: |
+          if [ ! -f jenkinsfile-lint.log ]; then
+            echo "jenkinsfile-runner: no lint output produced (skipped or succeeded without log)" > jenkinsfile-lint.log
+          fi
+
       - name: Upload jenkinsfile lint log
         if: always()
         uses: actions/upload-artifact@v4
