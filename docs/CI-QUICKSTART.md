@@ -72,6 +72,12 @@ gh run list --workflow=build-jenkinsfile-runner.yml --limit 5
 gh run view <run-id> --log
 ```
 
+## Remote validation alternative
+If Docker is unavailable locally, validate the Jenkinsfile and infra checks remotely:
+```bash
+gh workflow run validate-infra.yml --ref main
+```
+
 ## Action developer checklist
 1. Confirm the workflow file is committed and pushed to `main`.
 2. Add `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `AWS_ACCOUNT_ID` as repository secrets.

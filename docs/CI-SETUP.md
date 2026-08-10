@@ -51,3 +51,9 @@ Notes:
 - The workflow `build-jenkinsfile-runner.yml` already contains `workflow_dispatch:` so it can be run manually.
 - Ensure the branch/ref you pass to `gh workflow run` exists (e.g., `main` or `master`).
 - The secrets required are: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ACCOUNT_ID`.
+- If Docker is unavailable locally, validate the Jenkinsfile remotely by running `validate-infra.yml` in GitHub Actions.
+
+Remote Jenkinsfile validation example:
+```bash
+gh workflow run validate-infra.yml --ref main
+```
