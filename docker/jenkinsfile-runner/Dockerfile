@@ -6,4 +6,5 @@ USER root
 COPY plugins.txt /usr/share/jenkins/plugins.txt
 RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/plugins.txt || true
 
-USER jenkins
+# Keep running as root so Jenkinsfile Runner can execute on hosts where the base image lacks a jenkins user.
+USER root
