@@ -596,4 +596,15 @@ pipeline {
       }
     }
   }
+
+  post {
+    always {
+      echo 'Archiving available text logs and cleaning workspace.'
+      archiveArtifacts artifacts: '**/*.{log,txt}', allowEmptyArchive: true
+      cleanWs()
+    }
+    failure {
+      echo 'Build failed. Review archived artifacts and console output.'
+    }
+  }
 }
