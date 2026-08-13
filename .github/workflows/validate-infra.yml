@@ -94,11 +94,11 @@ jobs:
         continue-on-error: true
         run: |
           if [ -f Jenkinsfile ]; then
-            echo "Building custom jenkinsfile-runner image with plugins..."
-            docker build --pull --no-cache -t local/jfr:latest -f docker/jenkinsfile-runner/Dockerfile docker/jenkinsfile-runner
-            echo "Running jenkinsfile-runner to validate Jenkinsfile (timeout 20m)..."
+            echo "Building custom jenkinsfile-runner image with plugins (pre-baked WAR)..."
+            docker build --pull --no-cache --build-arg JENKINS_VERSION=2.568.2 -t local/jfr:latest -f docker/jenkinsfile-runner/Dockerfile docker/jenkinsfile-runner
+            echo "Running jenkinsfile-runner to validate Jenkinsfile (timeout 20m) using pre-baked WAR..."
             # Run lint with timeout and capture output to a log file so the job cannot hang indefinitely
-            /usr/bin/timeout 20m docker run --rm -v "$PWD":/workspace -w /workspace local/jfr:latest lint > jenkinsfile-lint.log 2>&1 || {
+            /usr/bin/timeout 20m docker run --rm -v "$PWD":/workspace -w /workspace local/jfr:latest --jenkins-war /root/.jenkinsfile-runner/war/2.568.2/jenkins.war lint > jenkinsfile-lint.log 2>&1 || {
               echo "jenkinsfile-runner reported issues or timed out; lint output saved to jenkinsfile-lint.log";
             }
             echo "Jenkinsfile lint finished (logs saved)."
