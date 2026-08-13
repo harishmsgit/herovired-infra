@@ -29,7 +29,7 @@ ENV JENKINS_VERSION=${JENKINS_VERSION}
 # runner will still attempt a runtime download when absent.
 RUN mkdir -p /root/.jenkinsfile-runner/war/${JENKINS_VERSION} && \
 		if command -v curl >/dev/null 2>&1; then \
-			curl -fsSL "https://get.jenkins.io/war-stable/${JENKINS_VERSION}/jenkins.war" -o /root/.jenkinsfile-runner/war/${JENKINS_VERSION}/jenkins-war-${JENKINS_VERSION}.war || echo "WARNING: pre-fetch failed, runner will download at runtime"; \
+				curl -fsSL "https://get.jenkins.io/war-stable/${JENKINS_VERSION}/jenkins.war" -o /root/.jenkinsfile-runner/war/${JENKINS_VERSION}/jenkins.war || echo "WARNING: pre-fetch failed, runner will download at runtime"; \
 		else \
 			echo "curl not found; skipping pre-fetch (runner will download at runtime)"; \
 		fi || true
