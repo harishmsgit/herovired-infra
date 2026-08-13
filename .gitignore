@@ -1,0 +1,5 @@
+.github/workflows/_artifacts/
+jenkinsfile-runner*/
+jenkinsfile-lint*.log
+workflow-*.log
+*.log
