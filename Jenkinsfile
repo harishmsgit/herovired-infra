@@ -352,20 +352,7 @@ pipeline {
             fi
           '''
 
-          # kubectl dry-run requires AWS credentials if kubeconfig points to EKS
-          # Wrap it with ensureAwsCredentials to ensure credentials are in scope
-          if (fileExists("${K8S_MANIFESTS_DIR}") && fileExists(System.getenv('HOME') + '/.kube/config')) {
-            ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
-              sh '''
-                if command -v kubectl >/dev/null 2>&1; then
-                  echo 'Running kubectl dry-run for k8s manifests...'
-                  find "${K8S_MANIFESTS_DIR}" -name '*.yaml' -print0 | xargs -0 -n1 -I{} kubectl apply --dry-run=client --validate=false -f {} 2>/dev/null || true
-                fi
-              '''
-            }
-          } else {
-            echo 'K8S_MANIFESTS_DIR or kubeconfig not found; skipping k8s dry-run'
-          }
+          echo 'Preflight checks completed. kubectl dry-run will be performed after AWS authentication.'
         }
       }
     }
