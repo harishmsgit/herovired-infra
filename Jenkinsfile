@@ -69,7 +69,7 @@ pipeline {
     booleanParam(name: 'RUN_TERRAFORM', defaultValue: true, description: 'Run Terraform when infra files change')
     booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Run Ansible after Terraform apply or when ansible files change')
     booleanParam(name: 'RUN_DEPLOYMENT', defaultValue: true, description: 'Deploy application workloads using current image tags')
-    string(name: 'K8S_NAMESPACE', defaultValue: 'shopnow-prod', description: 'Kubernetes namespace for the application workloads')
+    string(name: 'K8S_NAMESPACE', defaultValue: 'shopnow-dev', description: 'Kubernetes namespace for the application workloads')
     string(name: 'MONITORING_NAMESPACE', defaultValue: 'monitor-ns', description: 'Namespace for monitoring workloads')
     string(name: 'MONITORING_RELEASE_NAME', defaultValue: 'prometheus', description: 'Monitoring release name')
     string(name: 'GRAFANA_ADMIN_PASSWORD', defaultValue: 'dev-grafana-admin', description: 'Grafana admin password')
