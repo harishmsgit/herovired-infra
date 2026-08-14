@@ -16,46 +16,6 @@ def loadSharedInfra(script) {
   return [support: support, config: config]
 }
 
-def infraRoot(script) {
-  def result = script.sh(
-    script: '''
-      set -e
-      if [ -f terraform/main.tf ] && [ -f ansible/playbooks/configure-management.yml ]; then
-        echo "."
-      elif [ -f herovired-infra/terraform/main.tf ] && [ -f herovired-infra/ansible/playbooks/configure-management.yml ]; then
-        echo "herovired-infra"
-      else
-        echo "__NOT_FOUND__"
-      fi
-    ''',
-    returnStdout: true
-  ).trim()
-
-  if (!result || result == '__NOT_FOUND__') {
-    script.error('Could not locate terraform and ansible under herovired-infra/ or the workspace root.')
-  }
-
-  return result
-}
-
-def repoRoot(script) {
-  def result = script.sh(
-    script: '''
-      set -e
-      if [ -f frontend/package.json ] && [ -f admin/package.json ] && [ -f backend/package.json ]; then
-        echo "."
-      elif [ -f shopNow/frontend/package.json ] && [ -f shopNow/admin/package.json ] && [ -f shopNow/backend/package.json ]; then
-        echo "shopNow"
-      else
-        echo "__NOT_FOUND__"
-      fi
-    ''',
-    returnStdout: true
-  ).trim()
-
-  return result == '__NOT_FOUND__' ? null : result
-}
-
 def changeMatches(List<String> changedFiles, List<String> prefixes) {
   return changedFiles.any { file -> prefixes.any { prefix -> file == prefix || file.startsWith(prefix) } }
 }
@@ -185,8 +145,40 @@ pipeline {
             env.SSH_PRIVATE_KEY_CREDENTIALS_ID = infraSupport.resolveConfigValue(this, sharedConfig, 'SSH_PRIVATE_KEY_CREDENTIALS_ID', params.SSH_PRIVATE_KEY_CREDENTIALS_ID)
           }
 
-          env.INFRA_ROOT = infraRoot(this)
-          env.APP_ROOT = repoRoot(this) ?: ''
+          def infraRootProbe = sh(
+            script: '''
+              set -e
+              if [ -f terraform/main.tf ] && [ -f ansible/playbooks/configure-management.yml ]; then
+                echo "."
+              elif [ -f herovired-infra/terraform/main.tf ] && [ -f herovired-infra/ansible/playbooks/configure-management.yml ]; then
+                echo "herovired-infra"
+              else
+                echo "__NOT_FOUND__"
+              fi
+            ''',
+            returnStdout: true
+          ).trim()
+
+          if (!infraRootProbe || infraRootProbe == '__NOT_FOUND__') {
+            error('Could not locate terraform and ansible under herovired-infra/ or the workspace root.')
+          }
+          env.INFRA_ROOT = infraRootProbe
+
+          def appRootProbe = sh(
+            script: '''
+              set -e
+              if [ -f frontend/package.json ] && [ -f admin/package.json ] && [ -f backend/package.json ]; then
+                echo "."
+              elif [ -f shopNow/frontend/package.json ] && [ -f shopNow/admin/package.json ] && [ -f shopNow/backend/package.json ]; then
+                echo "shopNow"
+              else
+                echo "__NOT_FOUND__"
+              fi
+            ''',
+            returnStdout: true
+          ).trim()
+          env.APP_ROOT = appRootProbe == '__NOT_FOUND__' ? '' : appRootProbe
+
           env.TERRAFORM_DIR = env.INFRA_ROOT == '.' ? 'terraform' : "${env.INFRA_ROOT}/terraform"
           env.ANSIBLE_DIR = env.INFRA_ROOT == '.' ? 'ansible' : "${env.INFRA_ROOT}/ansible"
           env.K8S_MANIFESTS_DIR = env.INFRA_ROOT == '.' ? 'kubernetes/k8s-manifests' : "${env.INFRA_ROOT}/kubernetes/k8s-manifests"
