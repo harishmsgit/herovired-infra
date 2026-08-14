@@ -3,3 +3,6 @@ jenkinsfile-runner*/
 jenkinsfile-lint*.log
 workflow-*.log
 *.log
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/tfplan
