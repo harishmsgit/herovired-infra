@@ -9,6 +9,7 @@ SINGLE_ECR_REPOSITORY ?=
 IMAGE_TAG ?= latest
 USER_NAME ?= harish
 TF_STATE_BUCKET ?= shopnow-terraform-state
+TF_STATE_BUCKET_REGION ?= us-east-1
 LOCK_TABLE ?= shopnow-terraform-locks
 K8S_NAMESPACE ?= shopnow-ns
 MANIFEST_ROOT ?= herovired-infra/kubernetes/k8s-manifests
@@ -47,7 +48,7 @@ terraform-init:
 	@echo "Initializing terraform in ./terraform"
 	@cd terraform && terraform init -reconfigure \
 		-backend-config="bucket=$(TF_STATE_BUCKET)" \
-		-backend-config="region=$(AWS_REGION)" \
+		-backend-config="region=$(TF_STATE_BUCKET_REGION)" \
 		-backend-config="dynamodb_table=$(LOCK_TABLE)"
 
 terraform-plan:

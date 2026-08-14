@@ -19,6 +19,7 @@ pipeline {
   parameters {
     string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region used by Terraform and EKS')
     string(name: 'TF_STATE_BUCKET', defaultValue: 'shopnow-terraform-state', description: 'S3 bucket for Terraform state')
+    string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'us-east-1', description: 'Region the Terraform state S3 bucket actually lives in')
     string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
     string(name: 'ENVIRONMENT', defaultValue: 'dev', description: 'Terraform workspace/environment to read outputs from')
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name used when Terraform outputs are unavailable')
@@ -31,6 +32,7 @@ pipeline {
     AWS_REGION = "${params.AWS_REGION}"
     TF_VAR_aws_region = "${params.AWS_REGION}"
     TF_VAR_state_bucket = "${params.TF_STATE_BUCKET}"
+    TF_STATE_BUCKET_REGION = "${params.TF_STATE_BUCKET_REGION}"
     TF_VAR_lock_table = "${params.LOCK_TABLE}"
     EKS_CLUSTER_NAME = "${params.EKS_CLUSTER_NAME}"
     PROJECT_DIR = ''
@@ -60,6 +62,7 @@ pipeline {
             env.AWS_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'AWS_REGION', 'ap-south-1')
             env.TF_VAR_aws_region = env.AWS_REGION
             env.TF_STATE_BUCKET = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET', 'shopnow-terraform-state')
+            env.TF_STATE_BUCKET_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET_REGION', 'us-east-1')
             env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', 'shopnow-terraform-locks')
             env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', 'java-spring-eks')
             env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', 'ubuntu')
@@ -129,7 +132,7 @@ pipeline {
                 terraform init -input=false -reconfigure \
                   -backend-config="bucket=${TF_STATE_BUCKET}" \
                   -backend-config="key=terraform/terraform.tfstate" \
-                  -backend-config="region=${AWS_REGION}" \
+                  -backend-config="region=${TF_STATE_BUCKET_REGION}" \
                   -backend-config="use_lockfile=true" \
                   -backend-config="dynamodb_table=${LOCK_TABLE}"
                 terraform workspace select ${ENVIRONMENT}

@@ -28,6 +28,7 @@ pipeline {
   parameters {
     string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region for provisioning')
     string(name: 'TF_STATE_BUCKET', defaultValue: 'shopnow-terraform-state', description: 'S3 bucket for Terraform state')
+    string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'us-east-1', description: 'Region the Terraform state S3 bucket actually lives in')
     string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
     string(name: 'ENVIRONMENT', defaultValue: 'dev', description: 'Deployment environment name')
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name used for discovery and downstream jobs')
@@ -43,6 +44,7 @@ pipeline {
     AWS_REGION = "${params.AWS_REGION}"
     TF_VAR_aws_region = "${params.AWS_REGION}"
     TF_VAR_state_bucket = "${params.TF_STATE_BUCKET}"
+    TF_STATE_BUCKET_REGION = "${params.TF_STATE_BUCKET_REGION}"
     TF_VAR_lock_table = "${params.LOCK_TABLE}"
     EKS_CLUSTER_NAME = "${params.EKS_CLUSTER_NAME}"
     IMAGE_TAG = ''
@@ -70,6 +72,7 @@ pipeline {
             env.AWS_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'AWS_REGION', 'us-east-1')
             env.TF_VAR_aws_region = env.AWS_REGION
             env.TF_STATE_BUCKET = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET', 'shopnow-terraform-state')
+            env.TF_STATE_BUCKET_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET_REGION', 'us-east-1')
             env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', 'shopnow-terraform-locks')
             env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', 'java-spring-eks')
             env.ANSIBLE_JOB_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'ANSIBLE_JOB_NAME', 'shopnow-ansible-config')
@@ -118,11 +121,11 @@ pipeline {
             dir(env.TERRAFORM_DIR) {
               sh '''
                 set -e
-                if ! aws s3api head-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION} 2>/dev/null; then
-                  if [ "${AWS_REGION}" = "us-east-1" ]; then
-                    aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION}
+                if ! aws s3api head-bucket --bucket ${TF_STATE_BUCKET} --region ${TF_STATE_BUCKET_REGION} 2>/dev/null; then
+                  if [ "${TF_STATE_BUCKET_REGION}" = "us-east-1" ]; then
+                    aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${TF_STATE_BUCKET_REGION}
                   else
-                    aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION} --create-bucket-configuration LocationConstraint=${AWS_REGION}
+                    aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${TF_STATE_BUCKET_REGION} --create-bucket-configuration LocationConstraint=${TF_STATE_BUCKET_REGION}
                   fi
                 fi
 
@@ -149,7 +152,7 @@ pipeline {
                 terraform init -reconfigure \
                   -backend-config="bucket=${TF_STATE_BUCKET}" \
                   -backend-config="key=terraform/terraform.tfstate" \
-                  -backend-config="region=${AWS_REGION}" \
+                  -backend-config="region=${TF_STATE_BUCKET_REGION}" \
                   -backend-config="use_lockfile=true" \
                   -backend-config="dynamodb_table=${LOCK_TABLE}"
               '''

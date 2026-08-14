@@ -17,12 +17,32 @@ def loadSharedInfra(script) {
 }
 
 def infraRoot(script) {
-  if (script.fileExists('herovired-infra/terraform/main.tf') && script.fileExists('herovired-infra/ansible/playbooks/configure-management.yml')) {
-    return 'herovired-infra'
+  def candidates = [
+    ['terraform/main.tf', 'ansible/playbooks/configure-management.yml', '.'],
+    ['herovired-infra/terraform/main.tf', 'herovired-infra/ansible/playbooks/configure-management.yml', 'herovired-infra']
+  ]
+
+  for (entry in candidates) {
+    if (script.fileExists(entry[0]) && script.fileExists(entry[1])) {
+      return entry[2]
+    }
   }
-  if (script.fileExists('terraform/main.tf') && script.fileExists('ansible/playbooks/configure-management.yml')) {
-    return '.'
+
+  def fallback = script.sh(script: '''
+    set +e
+    if [ -f terraform/main.tf ] && [ -f ansible/playbooks/configure-management.yml ]; then
+      echo "."
+    elif [ -f herovired-infra/terraform/main.tf ] && [ -f herovired-infra/ansible/playbooks/configure-management.yml ]; then
+      echo "herovired-infra"
+    else
+      echo "null"
+    fi
+  ''', returnStdout: true).trim()
+
+  if (fallback != 'null') {
+    return fallback
   }
+
   script.error('Could not locate terraform and ansible under herovired-infra/ or the workspace root.')
 }
 
@@ -70,6 +90,7 @@ pipeline {
     string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region used by Terraform and EKS')
     string(name: 'AWS_ACCOUNT_ID', defaultValue: '495013583028', description: 'AWS account used for shared infra lookups')
     string(name: 'TF_STATE_BUCKET', defaultValue: 'shopnow-terraform-state', description: 'S3 bucket for Terraform state')
+    string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'us-east-1', description: 'Region the Terraform state S3 bucket actually lives in (may differ from AWS_REGION)')
     string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name')
     string(name: 'ECR_REPO_PREFIX', defaultValue: 'shopnow-dev', description: 'ECR repository prefix for the current environment (dev/prod)')
@@ -108,6 +129,7 @@ pipeline {
     AWS_REGION = "${params.AWS_REGION}"
     AWS_ACCOUNT_ID = "${params.AWS_ACCOUNT_ID}"
     TF_STATE_BUCKET = "${params.TF_STATE_BUCKET}"
+    TF_STATE_BUCKET_REGION = "${params.TF_STATE_BUCKET_REGION}"
     LOCK_TABLE = "${params.LOCK_TABLE}"
     EKS_CLUSTER_NAME = "${params.EKS_CLUSTER_NAME}"
     ECR_REPO_PREFIX = "${params.ECR_REPO_PREFIX}"
@@ -130,11 +152,14 @@ pipeline {
     APP_ROOT = ''
     TERRAFORM_DIR = ''
     ANSIBLE_DIR = ''
+    K8S_MANIFESTS_DIR = ''
+    MONITORING_DIR = ''
     INVENTORY_FILE = ''
     TF_OUTPUT_FILE = ''
     INFRA_CHANGED = 'false'
     TERRAFORM_CHANGED = 'false'
     ANSIBLE_CHANGED = 'false'
+    AUTO_INSTALL_CLI_TOOLS = "${params.AUTO_INSTALL_CLI_TOOLS}"
   }
 
   stages {
@@ -162,8 +187,10 @@ pipeline {
 
           env.INFRA_ROOT = infraRoot(this)
           env.APP_ROOT = repoRoot(this) ?: ''
-          env.TERRAFORM_DIR = env.INFRA_ROOT == '.' ? 'terraform' : 'herovired-infra/terraform'
-          env.ANSIBLE_DIR = env.INFRA_ROOT == '.' ? 'ansible' : 'herovired-infra/ansible'
+          env.TERRAFORM_DIR = env.INFRA_ROOT == '.' ? 'terraform' : "${env.INFRA_ROOT}/terraform"
+          env.ANSIBLE_DIR = env.INFRA_ROOT == '.' ? 'ansible' : "${env.INFRA_ROOT}/ansible"
+          env.K8S_MANIFESTS_DIR = env.INFRA_ROOT == '.' ? 'kubernetes/k8s-manifests' : "${env.INFRA_ROOT}/kubernetes/k8s-manifests"
+          env.MONITORING_DIR = env.INFRA_ROOT == '.' ? 'kubernetes/monitoring' : "${env.INFRA_ROOT}/kubernetes/monitoring"
           env.INVENTORY_FILE = "${WORKSPACE}/${env.ANSIBLE_DIR}/inventories/generated/hosts.ini"
           env.TF_OUTPUT_FILE = "${WORKSPACE}/${env.ANSIBLE_DIR}/terraform-outputs.json"
           if (!env.IMAGE_TAG?.trim()) {
@@ -239,7 +266,7 @@ pipeline {
             fi
 
             echo "Missing CLI tools:$missing"
-            if [ "${AUTO_INSTALL_CLI_TOOLS}" != 'true' ]; then
+            if [ "${params.AUTO_INSTALL_CLI_TOOLS}" != 'true' ] && [ "${AUTO_INSTALL_CLI_TOOLS}" != 'true' ]; then
               echo "Set parameter AUTO_INSTALL_CLI_TOOLS=true to attempt automatic installation, or install manually with the commands below."
               echo "kubectl: https://kubernetes.io/docs/tasks/tools/"
               echo "helm: https://helm.sh/docs/intro/install/"
@@ -316,28 +343,28 @@ pipeline {
             set -e
             if command -v ansible-lint >/dev/null 2>&1; then
               echo 'Running ansible-lint...'
-              ansible-lint herovired-infra/ansible || true
+              ansible-lint "${ANSIBLE_DIR}" || true
             else
               echo 'ansible-lint not found; skipping'
             fi
 
             if command -v ansible-playbook >/dev/null 2>&1; then
               echo 'Checking ansible syntax...'
-              ansible-playbook --syntax-check herovired-infra/ansible/playbooks/configure-management.yml || true
+              ansible-playbook --syntax-check "${ANSIBLE_DIR}/playbooks/configure-management.yml" || true
             else
               echo 'ansible-playbook not found; skipping syntax check'
             fi
 
             if command -v kubectl >/dev/null 2>&1; then
               echo 'Running kubectl dry-run for k8s manifests...'
-              find herovired-infra/kubernetes/k8s-manifests -name '*.yaml' -print0 | xargs -0 -n1 -I{} kubectl apply --dry-run=client -f {} || true
+              find "${K8S_MANIFESTS_DIR}" -name '*.yaml' -print0 | xargs -0 -n1 -I{} kubectl apply --dry-run=client -f {} || true
             else
               echo 'kubectl not found; skipping k8s dry-run'
             fi
 
             if command -v kubeval >/dev/null 2>&1; then
               echo 'Running kubeval...'
-              kubeval herovired-infra/kubernetes/k8s-manifests || true
+              kubeval "${K8S_MANIFESTS_DIR}" || true
             else
               echo 'kubeval not found; skipping'
             fi
@@ -418,7 +445,7 @@ pipeline {
                 terraform init -reconfigure \
                   -backend-config="bucket=${TF_STATE_BUCKET}" \
                   -backend-config="key=terraform/terraform.tfstate" \
-                  -backend-config="region=${AWS_REGION}" \
+                  -backend-config="region=${TF_STATE_BUCKET_REGION}" \
                   -backend-config="use_lockfile=true" \
                   -backend-config="dynamodb_table=${LOCK_TABLE}"
 
@@ -441,7 +468,8 @@ pipeline {
       steps {
         script {
           ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
-            sh "$WORKSPACE/herovired-infra/scripts/create_aws_secret.sh shopnow/mongo ${AWS_REGION}"
+            def secretScript = env.INFRA_ROOT == '.' ? "$WORKSPACE/scripts/create_aws_secret.sh" : "$WORKSPACE/${env.INFRA_ROOT}/scripts/create_aws_secret.sh"
+            sh "${secretScript} shopnow/mongo ${AWS_REGION}"
           }
         }
       }
@@ -481,8 +509,8 @@ pipeline {
       steps {
         sh '''
           set -e
-          . "$WORKSPACE/herovired-infra/scripts/ensure_ansible.sh"
-          python3 "$WORKSPACE/herovired-infra/scripts/generate_ansible_inventory.py" \
+          . "$WORKSPACE/${INFRA_ROOT}/scripts/ensure_ansible.sh"
+          python3 "$WORKSPACE/${INFRA_ROOT}/scripts/generate_ansible_inventory.py" \
             --terraform-output "$TF_OUTPUT_FILE" \
             --inventory "$INVENTORY_FILE" \
             --remote-user "$REMOTE_USER"
@@ -501,14 +529,14 @@ pipeline {
           }
           sh '''
             set -e
-            . "$WORKSPACE/herovired-infra/scripts/ensure_ansible.sh"
-            export ANSIBLE_CONFIG="$WORKSPACE/herovired-infra/ansible/ansible.cfg"
-            ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/herovired-infra/ansible/playbooks/configure-management.yml" \
+            . "$WORKSPACE/${INFRA_ROOT}/scripts/ensure_ansible.sh"
+            export ANSIBLE_CONFIG="$WORKSPACE/${ANSIBLE_DIR}/ansible.cfg"
+            ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/configure-management.yml" \
               -e "aws_region=${AWS_REGION}" \
               -e "eks_cluster_name=${EKS_CLUSTER_NAME}" \
               -e "remote_user=${REMOTE_USER}"
 
-            ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/herovired-infra/ansible/playbooks/validate-management.yml"
+            ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/validate-management.yml"
           '''
         }
       }
@@ -533,26 +561,26 @@ pipeline {
           }
 
           sh 'kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
-          sh "sed -e 's|name: shopnow-ns|name: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/namespace/namespace.yaml | kubectl apply -f -"
-          sh "for file in herovired-infra/kubernetes/k8s-manifests/database/*.yaml; do sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' \"$file\" | kubectl apply -f -; done"
+          sh "sed -e 's|name: shopnow-ns|name: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/namespace/namespace.yaml | kubectl apply -f -"
+          sh "for file in ${K8S_MANIFESTS_DIR}/database/*.yaml; do sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' \"$file\" | kubectl apply -f -; done"
 
           def deployTasks = [:]
           if (env.DEPLOY_FRONTEND == 'true') {
             deployTasks.frontend = {
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_FRONTEND_IMAGE|${frontendImage}|g' herovired-infra/kubernetes/k8s-manifests/frontend/deployment.yaml | kubectl apply -f -"
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/frontend/service.yaml | kubectl apply -f -"
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_FRONTEND_IMAGE|${frontendImage}|g' ${K8S_MANIFESTS_DIR}/frontend/deployment.yaml | kubectl apply -f -"
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/frontend/service.yaml | kubectl apply -f -"
             }
           }
           if (env.DEPLOY_ADMIN == 'true') {
             deployTasks.admin = {
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_ADMIN_IMAGE|${adminImage}|g' herovired-infra/kubernetes/k8s-manifests/admin/deployment.yaml | kubectl apply -f -"
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/admin/service.yaml | kubectl apply -f -"
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_ADMIN_IMAGE|${adminImage}|g' ${K8S_MANIFESTS_DIR}/admin/deployment.yaml | kubectl apply -f -"
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/admin/service.yaml | kubectl apply -f -"
             }
           }
           if (env.DEPLOY_BACKEND == 'true') {
             deployTasks.backend = {
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_BACKEND_IMAGE|${backendImage}|g' herovired-infra/kubernetes/k8s-manifests/backend/deployment.yaml | kubectl apply -f -"
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/backend/service.yaml | kubectl apply -f -"
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_BACKEND_IMAGE|${backendImage}|g' ${K8S_MANIFESTS_DIR}/backend/deployment.yaml | kubectl apply -f -"
+              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/backend/service.yaml | kubectl apply -f -"
             }
           }
 
@@ -562,7 +590,7 @@ pipeline {
             parallel deployTasks
           }
 
-          sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' herovired-infra/kubernetes/k8s-manifests/ingress/ingress-shopnow.yaml | kubectl apply -f -"
+          sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/ingress/ingress-shopnow.yaml | kubectl apply -f -"
 
           sh 'kubectl rollout status deployment/mongo -n ${K8S_NAMESPACE} --timeout=5m'
           if (env.DEPLOY_FRONTEND == 'true') {
@@ -577,7 +605,7 @@ pipeline {
 
           if (params.ENABLE_MONITORING_CHECKS) {
             sh 'kubectl create namespace ${MONITORING_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
-            sh "for file in herovired-infra/kubernetes/monitoring/*.yaml; do sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\\\"shopnow-ns\\\"|namespace=\\\"${K8S_NAMESPACE}\\\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' \"$file\" | kubectl apply -f -; done"
+            sh "for file in ${MONITORING_DIR}/*.yaml; do sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' \"$file\" | kubectl apply -f -; done"
             sh 'kubectl get pods -n ${MONITORING_NAMESPACE}'
             sh 'kubectl get servicemonitor -n ${MONITORING_NAMESPACE} || true'
             sh 'kubectl get prometheusrule -n ${MONITORING_NAMESPACE} || true'
