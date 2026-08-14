@@ -86,40 +86,27 @@ pipeline {
   }
 
   environment {
-    AWS_REGION = "${params.AWS_REGION}"
     AWS_ACCOUNT_ID = "${params.AWS_ACCOUNT_ID}"
-    TF_STATE_BUCKET = "${params.TF_STATE_BUCKET}"
     TF_STATE_BUCKET_REGION = "${params.TF_STATE_BUCKET_REGION}"
-    LOCK_TABLE = "${params.LOCK_TABLE}"
-    EKS_CLUSTER_NAME = "${params.EKS_CLUSTER_NAME}"
     ECR_REPO_PREFIX = "${params.ECR_REPO_PREFIX}"
     ECR_REPOSITORY_STRATEGY = "${params.ECR_REPOSITORY_STRATEGY}"
     SINGLE_ECR_REPOSITORY = "${params.SINGLE_ECR_REPOSITORY}"
     FRONTEND_IMAGE_URI = "${params.FRONTEND_IMAGE_URI}"
     ADMIN_IMAGE_URI = "${params.ADMIN_IMAGE_URI}"
     BACKEND_IMAGE_URI = "${params.BACKEND_IMAGE_URI}"
-    IMAGE_TAG = "${params.IMAGE_TAG}"
-    DEPLOY_FRONTEND = "${params.DEPLOY_FRONTEND}"
-    DEPLOY_ADMIN = "${params.DEPLOY_ADMIN}"
-    DEPLOY_BACKEND = "${params.DEPLOY_BACKEND}"
     K8S_NAMESPACE = "${params.K8S_NAMESPACE}"
     MONITORING_NAMESPACE = "${params.MONITORING_NAMESPACE}"
     MONITORING_RELEASE_NAME = "${params.MONITORING_RELEASE_NAME}"
     GRAFANA_ADMIN_PASSWORD = "${params.GRAFANA_ADMIN_PASSWORD}"
-    REMOTE_USER = "${params.REMOTE_USER}"
-    SSH_PRIVATE_KEY_CREDENTIALS_ID = "${params.SSH_PRIVATE_KEY_CREDENTIALS_ID}"
-    INFRA_ROOT = ''
-    APP_ROOT = ''
-    TERRAFORM_DIR = ''
-    ANSIBLE_DIR = ''
-    K8S_MANIFESTS_DIR = ''
-    MONITORING_DIR = ''
-    INVENTORY_FILE = ''
-    TF_OUTPUT_FILE = ''
-    INFRA_CHANGED = 'false'
-    TERRAFORM_CHANGED = 'false'
-    ANSIBLE_CHANGED = 'false'
     AUTO_INSTALL_CLI_TOOLS = "${params.AUTO_INSTALL_CLI_TOOLS}"
+    // AWS_REGION, TF_STATE_BUCKET, LOCK_TABLE, EKS_CLUSTER_NAME, REMOTE_USER,
+    // SSH_PRIVATE_KEY_CREDENTIALS_ID, IMAGE_TAG, INFRA_ROOT, APP_ROOT, TERRAFORM_DIR,
+    // ANSIBLE_DIR, K8S_MANIFESTS_DIR, MONITORING_DIR, INVENTORY_FILE, TF_OUTPUT_FILE,
+    // INFRA_CHANGED, TERRAFORM_CHANGED, ANSIBLE_CHANGED, DEPLOY_FRONTEND, DEPLOY_ADMIN,
+    // DEPLOY_BACKEND are intentionally NOT pre-declared here: pre-declaring them in this
+    // block pins their value for the whole run and later env.X reassignments in the
+    // Initialize stage silently fail to reach shell steps in later stages. They are set
+    // as fresh vars in the Initialize stage instead.
   }
 
   stages {
@@ -135,6 +122,14 @@ pipeline {
           def sharedInfra = loadSharedInfra(this)
           def infraSupport = sharedInfra.support
           def sharedConfig = sharedInfra.config ?: [:]
+
+          env.AWS_REGION = params.AWS_REGION
+          env.TF_STATE_BUCKET = params.TF_STATE_BUCKET
+          env.LOCK_TABLE = params.LOCK_TABLE
+          env.EKS_CLUSTER_NAME = params.EKS_CLUSTER_NAME
+          env.REMOTE_USER = params.REMOTE_USER
+          env.SSH_PRIVATE_KEY_CREDENTIALS_ID = params.SSH_PRIVATE_KEY_CREDENTIALS_ID
+          env.IMAGE_TAG = params.IMAGE_TAG
 
           if (infraSupport) {
             env.AWS_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'AWS_REGION', params.AWS_REGION)
@@ -349,11 +344,11 @@ pipeline {
               echo 'ansible-playbook not found; skipping syntax check'
             fi
 
-            if command -v kubectl >/dev/null 2>&1; then
+            if command -v kubectl >/dev/null 2>&1 && [ -d "${K8S_MANIFESTS_DIR}" ]; then
               echo 'Running kubectl dry-run for k8s manifests...'
               find "${K8S_MANIFESTS_DIR}" -name '*.yaml' -print0 | xargs -0 -n1 -I{} kubectl apply --dry-run=client -f {} || true
             else
-              echo 'kubectl not found; skipping k8s dry-run'
+              echo 'kubectl not found or K8S_MANIFESTS_DIR not set; skipping k8s dry-run'
             fi
 
             if command -v kubeval >/dev/null 2>&1; then
@@ -622,7 +617,7 @@ pipeline {
   post {
     always {
       echo 'Archiving available text logs and cleaning workspace.'
-      archiveArtifacts artifacts: '**/*.{log,txt}', allowEmptyArchive: true
+      archiveArtifacts artifacts: '**/*.log, **/*.txt', allowEmptyArchive: true
       cleanWs()
     }
     failure {
