@@ -162,7 +162,10 @@ pipeline {
           if (!infraRootProbe || infraRootProbe == '__NOT_FOUND__') {
             error('Could not locate terraform and ansible under herovired-infra/ or the workspace root.')
           }
-          env.INFRA_ROOT = infraRootProbe
+
+          // Use local vars as the source of truth; env.X re-reads inside the
+          // same script block have proven unreliable on this Jenkins instance.
+          def infraRoot = infraRootProbe
 
           def appRootProbe = sh(
             script: '''
@@ -177,14 +180,21 @@ pipeline {
             ''',
             returnStdout: true
           ).trim()
-          env.APP_ROOT = appRootProbe == '__NOT_FOUND__' ? '' : appRootProbe
+          def appRoot = appRootProbe == '__NOT_FOUND__' ? '' : appRootProbe
 
-          env.TERRAFORM_DIR = env.INFRA_ROOT == '.' ? 'terraform' : "${env.INFRA_ROOT}/terraform"
-          env.ANSIBLE_DIR = env.INFRA_ROOT == '.' ? 'ansible' : "${env.INFRA_ROOT}/ansible"
-          env.K8S_MANIFESTS_DIR = env.INFRA_ROOT == '.' ? 'kubernetes/k8s-manifests' : "${env.INFRA_ROOT}/kubernetes/k8s-manifests"
-          env.MONITORING_DIR = env.INFRA_ROOT == '.' ? 'kubernetes/monitoring' : "${env.INFRA_ROOT}/kubernetes/monitoring"
-          env.INVENTORY_FILE = "${WORKSPACE}/${env.ANSIBLE_DIR}/inventories/generated/hosts.ini"
-          env.TF_OUTPUT_FILE = "${WORKSPACE}/${env.ANSIBLE_DIR}/terraform-outputs.json"
+          def terraformDir = infraRoot == '.' ? 'terraform' : "${infraRoot}/terraform"
+          def ansibleDir = infraRoot == '.' ? 'ansible' : "${infraRoot}/ansible"
+          def k8sManifestsDir = infraRoot == '.' ? 'kubernetes/k8s-manifests' : "${infraRoot}/kubernetes/k8s-manifests"
+          def monitoringDir = infraRoot == '.' ? 'kubernetes/monitoring' : "${infraRoot}/kubernetes/monitoring"
+
+          env.INFRA_ROOT = infraRoot
+          env.APP_ROOT = appRoot
+          env.TERRAFORM_DIR = terraformDir
+          env.ANSIBLE_DIR = ansibleDir
+          env.K8S_MANIFESTS_DIR = k8sManifestsDir
+          env.MONITORING_DIR = monitoringDir
+          env.INVENTORY_FILE = "${WORKSPACE}/${ansibleDir}/inventories/generated/hosts.ini"
+          env.TF_OUTPUT_FILE = "${WORKSPACE}/${ansibleDir}/terraform-outputs.json"
           if (!env.IMAGE_TAG?.trim()) {
             env.IMAGE_TAG = "${env.BUILD_NUMBER}-${sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()}"
           }
@@ -222,20 +232,27 @@ pipeline {
           env.TERRAFORM_CHANGED = terraformChanged.toString()
           env.ANSIBLE_CHANGED = ansibleChanged.toString()
 
-          echo "Infra root: ${env.INFRA_ROOT}"
-          echo "Terraform dir: ${env.TERRAFORM_DIR}"
-          echo "Ansible dir: ${env.ANSIBLE_DIR}"
-          if (env.TERRAFORM_CHANGED == 'true') {
-            env.DEPLOY_FRONTEND = 'true'
-            env.DEPLOY_ADMIN = 'true'
-            env.DEPLOY_BACKEND = 'true'
-          }
+          echo "Infra root: ${infraRoot}"
+          echo "Terraform dir: ${terraformDir}"
+          echo "Ansible dir: ${ansibleDir}"
 
-          echo "Terraform changed: ${env.TERRAFORM_CHANGED}"
-          echo "Ansible changed: ${env.ANSIBLE_CHANGED}"
-          echo "Deploy frontend: ${env.DEPLOY_FRONTEND}"
-          echo "Deploy admin: ${env.DEPLOY_ADMIN}"
-          echo "Deploy backend: ${env.DEPLOY_BACKEND}"
+          def deployFrontend = params.DEPLOY_FRONTEND
+          def deployAdmin = params.DEPLOY_ADMIN
+          def deployBackend = params.DEPLOY_BACKEND
+          if (terraformChanged) {
+            deployFrontend = true
+            deployAdmin = true
+            deployBackend = true
+          }
+          env.DEPLOY_FRONTEND = deployFrontend.toString()
+          env.DEPLOY_ADMIN = deployAdmin.toString()
+          env.DEPLOY_BACKEND = deployBackend.toString()
+
+          echo "Terraform changed: ${terraformChanged}"
+          echo "Ansible changed: ${ansibleChanged}"
+          echo "Deploy frontend: ${deployFrontend}"
+          echo "Deploy admin: ${deployAdmin}"
+          echo "Deploy backend: ${deployBackend}"
         }
       }
     }
@@ -243,8 +260,12 @@ pipeline {
     stage('Ensure CLI Tools') {
       steps {
         script {
+          env.LOCAL_TOOLS_BIN = "${WORKSPACE}/.tools/bin"
+          env.PATH = "${env.LOCAL_TOOLS_BIN}:${env.PATH}"
+
           sh '''
             set -euo pipefail
+            mkdir -p "${LOCAL_TOOLS_BIN}"
             missing=""
             for cmd in kubectl helm aws; do
               if ! command -v $cmd >/dev/null 2>&1; then
@@ -266,72 +287,44 @@ pipeline {
               exit 1
             fi
 
-            echo "AUTO_INSTALL_CLI_TOOLS=true — attempting best-effort installation"
+            echo "AUTO_INSTALL_CLI_TOOLS=true — installing missing tools into ${LOCAL_TOOLS_BIN} (no root/sudo required)"
 
-            SUDO=""
-            if [ "$(id -u)" != "0" ]; then
-              if command -v sudo >/dev/null 2>&1; then
-                SUDO="sudo"
-              else
-                echo "Not running as root and sudo is unavailable; installation may fail."
-              fi
-            fi
+            for cmd in $missing; do
+              case $cmd in
+                kubectl)
+                  KUBECTL_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+                  curl -L -s -o "${LOCAL_TOOLS_BIN}/kubectl" "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl" || true
+                  chmod +x "${LOCAL_TOOLS_BIN}/kubectl" 2>/dev/null || true
+                  ;;
+                helm)
+                  HELM_VER="v3.15.4"
+                  curl -L -s "https://get.helm.sh/helm-${HELM_VER}-linux-amd64.tar.gz" -o /tmp/helm.tar.gz || true
+                  tar -xzf /tmp/helm.tar.gz -C /tmp || true
+                  cp /tmp/linux-amd64/helm "${LOCAL_TOOLS_BIN}/helm" 2>/dev/null || true
+                  chmod +x "${LOCAL_TOOLS_BIN}/helm" 2>/dev/null || true
+                  rm -rf /tmp/helm.tar.gz /tmp/linux-amd64
+                  ;;
+                aws)
+                  curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip || true
+                  unzip -o -q /tmp/awscliv2.zip -d /tmp || true
+                  /tmp/aws/install --install-dir "${LOCAL_TOOLS_BIN}/aws-cli" --bin-dir "${LOCAL_TOOLS_BIN}" --update || true
+                  rm -rf /tmp/aws /tmp/awscliv2.zip
+                  ;;
+              esac
+            done
 
-            if [ -f /etc/debian_version ]; then
-              $SUDO apt-get update -y || true
-              $SUDO apt-get install -y ca-certificates curl unzip || true
-
-              for cmd in $missing; do
-                case $cmd in
-                  kubectl)
-                    KUBECTL_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
-                    curl -LO "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
-                    $SUDO install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl || true
-                    ;;
-                  helm)
-                    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
-                    ;;
-                  aws)
-                    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip || true
-                    unzip -o /tmp/awscliv2.zip -d /tmp || true
-                    $SUDO /tmp/aws/install || true
-                    ;;
-                esac
-              done
-
-            elif [ -f /etc/redhat-release ]; then
-              $SUDO yum install -y curl unzip || true
-              for cmd in $missing; do
-                case $cmd in
-                  kubectl)
-                    KUBECTL_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
-                    curl -LO "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
-                    $SUDO install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl || true
-                    ;;
-                  helm)
-                    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
-                    ;;
-                  aws)
-                    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip || true
-                    unzip -o /tmp/awscliv2.zip -d /tmp || true
-                    $SUDO /tmp/aws/install || true
-                    ;;
-                esac
-              done
-
-            else
-              echo "Unknown OS - automatic install not supported on this agent. Install kubectl/helm/aws manually."
-              exit 1
-            fi
-
-            # Re-check
+            still_missing=""
             for cmd in kubectl helm aws; do
               if ! command -v $cmd >/dev/null 2>&1; then
-                echo "$cmd still missing after attempted install"
-                exit 1
+                still_missing="$still_missing $cmd"
               fi
             done
-            echo "CLI tools installed/available"
+
+            if [ -n "$still_missing" ]; then
+              echo "Still missing after install:$still_missing"
+              exit 1
+            fi
+            echo "CLI tools installed/available in ${LOCAL_TOOLS_BIN}"
           '''
         }
       }
