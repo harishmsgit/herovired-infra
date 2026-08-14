@@ -69,7 +69,7 @@ pipeline {
     booleanParam(name: 'RUN_TERRAFORM', defaultValue: true, description: 'Run Terraform when infra files change')
     booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Run Ansible after Terraform apply or when ansible files change')
     booleanParam(name: 'RUN_DEPLOYMENT', defaultValue: true, description: 'Deploy application workloads using current image tags')
-    string(name: 'K8S_NAMESPACE', defaultValue: 'shopnow-dev', description: 'Kubernetes namespace for the application workloads')
+    string(name: 'K8S_NAMESPACE', defaultValue: 'shopnow-ns', description: 'Kubernetes namespace for the application workloads')
     string(name: 'MONITORING_NAMESPACE', defaultValue: 'monitor-ns', description: 'Namespace for monitoring workloads')
     string(name: 'MONITORING_RELEASE_NAME', defaultValue: 'prometheus', description: 'Monitoring release name')
     string(name: 'GRAFANA_ADMIN_PASSWORD', defaultValue: 'dev-grafana-admin', description: 'Grafana admin password')
@@ -465,23 +465,25 @@ pipeline {
       }
       steps {
         script {
-          sh '''
-            set -e
-            # wait for ExternalSecret to create the k8s secret (timeout 120s)
-            for i in $(seq 1 24); do
-              if kubectl get secret mongo-secret -n shopnow-ns >/dev/null 2>&1; then
-                echo 'Found k8s secret mongo-secret'
-                kubectl get secret mongo-secret -n shopnow-ns -o jsonpath='{.data.MONGODB_URI}' | base64 --decode >/tmp/mongo_uri || true
-                if [ -s /tmp/mongo_uri ]; then
-                  echo 'mongo-secret contains MONGODB_URI'
-                  exit 0
+          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+            sh '''
+              set -e
+              # wait for ExternalSecret to create the k8s secret (timeout 120s)
+              for i in $(seq 1 24); do
+                if kubectl get secret mongo-secret -n shopnow-ns >/dev/null 2>&1; then
+                  echo 'Found k8s secret mongo-secret'
+                  kubectl get secret mongo-secret -n shopnow-ns -o jsonpath='{.data.MONGODB_URI}' | base64 --decode >/tmp/mongo_uri || true
+                  if [ -s /tmp/mongo_uri ]; then
+                    echo 'mongo-secret contains MONGODB_URI'
+                    exit 0
+                  fi
                 fi
-              fi
-              sleep 5
-            done
-            echo 'ExternalSecret did not sync within timeout' >&2
-            exit 1
-          '''
+                sleep 5
+              done
+              echo 'ExternalSecret did not sync within timeout' >&2
+              exit 1
+            '''
+          }
         }
       }
     }
