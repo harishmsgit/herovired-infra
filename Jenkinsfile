@@ -17,43 +17,43 @@ def loadSharedInfra(script) {
 }
 
 def infraRoot(script) {
-  def candidates = [
-    ['terraform/main.tf', 'ansible/playbooks/configure-management.yml', '.'],
-    ['herovired-infra/terraform/main.tf', 'herovired-infra/ansible/playbooks/configure-management.yml', 'herovired-infra']
-  ]
+  def result = script.sh(
+    script: '''
+      set -e
+      if [ -f terraform/main.tf ] && [ -f ansible/playbooks/configure-management.yml ]; then
+        echo "."
+      elif [ -f herovired-infra/terraform/main.tf ] && [ -f herovired-infra/ansible/playbooks/configure-management.yml ]; then
+        echo "herovired-infra"
+      else
+        echo "__NOT_FOUND__"
+      fi
+    ''',
+    returnStdout: true
+  ).trim()
 
-  for (entry in candidates) {
-    if (script.fileExists(entry[0]) && script.fileExists(entry[1])) {
-      return entry[2]
-    }
+  if (!result || result == '__NOT_FOUND__') {
+    script.error('Could not locate terraform and ansible under herovired-infra/ or the workspace root.')
   }
 
-  def fallback = script.sh(script: '''
-    set +e
-    if [ -f terraform/main.tf ] && [ -f ansible/playbooks/configure-management.yml ]; then
-      echo "."
-    elif [ -f herovired-infra/terraform/main.tf ] && [ -f herovired-infra/ansible/playbooks/configure-management.yml ]; then
-      echo "herovired-infra"
-    else
-      echo "null"
-    fi
-  ''', returnStdout: true).trim()
-
-  if (fallback != 'null') {
-    return fallback
-  }
-
-  script.error('Could not locate terraform and ansible under herovired-infra/ or the workspace root.')
+  return result
 }
 
 def repoRoot(script) {
-  if (script.fileExists('frontend/package.json') && script.fileExists('admin/package.json') && script.fileExists('backend/package.json')) {
-    return '.'
-  }
-  if (script.fileExists('shopNow/frontend/package.json') && script.fileExists('shopNow/admin/package.json') && script.fileExists('shopNow/backend/package.json')) {
-    return 'shopNow'
-  }
-  return null
+  def result = script.sh(
+    script: '''
+      set -e
+      if [ -f frontend/package.json ] && [ -f admin/package.json ] && [ -f backend/package.json ]; then
+        echo "."
+      elif [ -f shopNow/frontend/package.json ] && [ -f shopNow/admin/package.json ] && [ -f shopNow/backend/package.json ]; then
+        echo "shopNow"
+      else
+        echo "__NOT_FOUND__"
+      fi
+    ''',
+    returnStdout: true
+  ).trim()
+
+  return result == '__NOT_FOUND__' ? null : result
 }
 
 def changeMatches(List<String> changedFiles, List<String> prefixes) {
@@ -114,7 +114,7 @@ pipeline {
     string(name: 'MONITORING_RELEASE_NAME', defaultValue: 'prometheus', description: 'Monitoring release name')
     string(name: 'GRAFANA_ADMIN_PASSWORD', defaultValue: 'dev-grafana-admin', description: 'Grafana admin password')
     booleanParam(name: 'ENABLE_MONITORING_CHECKS', defaultValue: true, description: 'Apply monitoring manifests and verify monitoring health')
-    booleanParam(name: 'AUTO_INSTALL_CLI_TOOLS', defaultValue: false, description: 'If true, attempt to auto-install missing CLI tools (kubectl/helm/aws) on the agent')
+    booleanParam(name: 'AUTO_INSTALL_CLI_TOOLS', defaultValue: true, description: 'If true, attempt to auto-install missing CLI tools (kubectl/helm/aws) on the agent')
   }
 
   options {
@@ -266,7 +266,7 @@ pipeline {
             fi
 
             echo "Missing CLI tools:$missing"
-            if [ "${params.AUTO_INSTALL_CLI_TOOLS}" != 'true' ] && [ "${AUTO_INSTALL_CLI_TOOLS}" != 'true' ]; then
+            if [ "${AUTO_INSTALL_CLI_TOOLS}" != 'true' ]; then
               echo "Set parameter AUTO_INSTALL_CLI_TOOLS=true to attempt automatic installation, or install manually with the commands below."
               echo "kubectl: https://kubernetes.io/docs/tasks/tools/"
               echo "helm: https://helm.sh/docs/intro/install/"
@@ -274,18 +274,27 @@ pipeline {
               exit 1
             fi
 
-            echo "AUTO_INSTALL_CLI_TOOLS=true — attempting best-effort installation (requires sudo)"
+            echo "AUTO_INSTALL_CLI_TOOLS=true — attempting best-effort installation"
+
+            SUDO=""
+            if [ "$(id -u)" != "0" ]; then
+              if command -v sudo >/dev/null 2>&1; then
+                SUDO="sudo"
+              else
+                echo "Not running as root and sudo is unavailable; installation may fail."
+              fi
+            fi
 
             if [ -f /etc/debian_version ]; then
-              sudo apt-get update -y || true
-              sudo apt-get install -y ca-certificates curl unzip || true
+              $SUDO apt-get update -y || true
+              $SUDO apt-get install -y ca-certificates curl unzip || true
 
               for cmd in $missing; do
                 case $cmd in
                   kubectl)
                     KUBECTL_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
                     curl -LO "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
-                    sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl || true
+                    $SUDO install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl || true
                     ;;
                   helm)
                     curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
@@ -293,19 +302,19 @@ pipeline {
                   aws)
                     curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip || true
                     unzip -o /tmp/awscliv2.zip -d /tmp || true
-                    sudo /tmp/aws/install || true
+                    $SUDO /tmp/aws/install || true
                     ;;
                 esac
               done
 
             elif [ -f /etc/redhat-release ]; then
-              sudo yum install -y curl unzip || true
+              $SUDO yum install -y curl unzip || true
               for cmd in $missing; do
                 case $cmd in
                   kubectl)
                     KUBECTL_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
                     curl -LO "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
-                    sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl || true
+                    $SUDO install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl || true
                     ;;
                   helm)
                     curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
@@ -313,7 +322,7 @@ pipeline {
                   aws)
                     curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip || true
                     unzip -o /tmp/awscliv2.zip -d /tmp || true
-                    sudo /tmp/aws/install || true
+                    $SUDO /tmp/aws/install || true
                     ;;
                 esac
               done
