@@ -67,6 +67,7 @@ pipeline {
     string(name: 'SSH_PRIVATE_KEY_CREDENTIALS_ID', defaultValue: 'management-ec2-ssh-key', description: 'SSH private key credentials for the management EC2 instance')
     string(name: 'REMOTE_USER', defaultValue: 'ubuntu', description: 'SSH user for the management EC2 instance')
     booleanParam(name: 'RUN_TERRAFORM', defaultValue: true, description: 'Run Terraform when infra files change')
+    booleanParam(name: 'FORCE_TERRAFORM', defaultValue: false, description: 'Force run Terraform even if infra files have not changed')
     booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Run Ansible after Terraform apply or when ansible files change')
     booleanParam(name: 'RUN_DEPLOYMENT', defaultValue: true, description: 'Deploy application workloads using current image tags')
     string(name: 'K8S_NAMESPACE', defaultValue: 'shopnow-ns', description: 'Kubernetes namespace for the application workloads')
@@ -406,7 +407,7 @@ pipeline {
 
     stage('Terraform') {
       when {
-        expression { return params.RUN_TERRAFORM && env.TERRAFORM_CHANGED == 'true' }
+        expression { return params.RUN_TERRAFORM && (env.TERRAFORM_CHANGED == 'true' || params.FORCE_TERRAFORM) }
       }
       steps {
         script {
