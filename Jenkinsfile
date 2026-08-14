@@ -436,7 +436,11 @@ pipeline {
 
                 terraform workspace select -or-create ${ENVIRONMENT:-dev} || terraform workspace select default
                 terraform validate
-                terraform plan -out=tfplan
+                terraform plan \
+                  -var="aws_region=${AWS_REGION}" \
+                  -var="cluster_name=${EKS_CLUSTER_NAME}" \
+                  -var="ecr_repo_prefix=${ECR_REPO_PREFIX}" \
+                  -out=tfplan
                 terraform apply -auto-approve tfplan
                 terraform output -json > ${TF_OUTPUT_FILE}
               '''
