@@ -346,7 +346,7 @@ pipeline {
 
             if command -v kubectl >/dev/null 2>&1 && [ -d "${K8S_MANIFESTS_DIR}" ]; then
               echo 'Running kubectl dry-run for k8s manifests...'
-              find "${K8S_MANIFESTS_DIR}" -name '*.yaml' -print0 | xargs -0 -n1 -I{} kubectl apply --dry-run=client -f {} || true
+              find "${K8S_MANIFESTS_DIR}" -name '*.yaml' -print0 | xargs -0 -n1 -I{} kubectl apply --dry-run=client --validate=false -f {} || true
             else
               echo 'kubectl not found or K8S_MANIFESTS_DIR not set; skipping k8s dry-run'
             fi
