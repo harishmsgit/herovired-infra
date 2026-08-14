@@ -547,62 +547,62 @@ pipeline {
 
           ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
             sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}'
-          }
 
-          sh 'kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
-          sh "sed -e 's|name: shopnow-ns|name: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/namespace/namespace.yaml | kubectl apply -f -"
-          sh "for file in ${K8S_MANIFESTS_DIR}/database/*.yaml; do sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' \"$file\" | kubectl apply -f -; done"
+            sh 'kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
+            sh "sed -e 's|name: shopnow-ns|name: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/namespace/namespace.yaml | kubectl apply -f -"
+            sh "for file in ${K8S_MANIFESTS_DIR}/database/*.yaml; do sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' \"$file\" | kubectl apply -f -; done"
 
-          def deployTasks = [:]
-          if (env.DEPLOY_FRONTEND == 'true') {
-            deployTasks.frontend = {
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_FRONTEND_IMAGE|${frontendImage}|g' ${K8S_MANIFESTS_DIR}/frontend/deployment.yaml | kubectl apply -f -"
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/frontend/service.yaml | kubectl apply -f -"
+            def deployTasks = [:]
+            if (env.DEPLOY_FRONTEND == 'true') {
+              deployTasks.frontend = {
+                sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_FRONTEND_IMAGE|${frontendImage}|g' ${K8S_MANIFESTS_DIR}/frontend/deployment.yaml | kubectl apply -f -"
+                sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/frontend/service.yaml | kubectl apply -f -"
+              }
             }
-          }
-          if (env.DEPLOY_ADMIN == 'true') {
-            deployTasks.admin = {
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_ADMIN_IMAGE|${adminImage}|g' ${K8S_MANIFESTS_DIR}/admin/deployment.yaml | kubectl apply -f -"
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/admin/service.yaml | kubectl apply -f -"
+            if (env.DEPLOY_ADMIN == 'true') {
+              deployTasks.admin = {
+                sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_ADMIN_IMAGE|${adminImage}|g' ${K8S_MANIFESTS_DIR}/admin/deployment.yaml | kubectl apply -f -"
+                sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/admin/service.yaml | kubectl apply -f -"
+              }
             }
-          }
-          if (env.DEPLOY_BACKEND == 'true') {
-            deployTasks.backend = {
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_BACKEND_IMAGE|${backendImage}|g' ${K8S_MANIFESTS_DIR}/backend/deployment.yaml | kubectl apply -f -"
-              sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/backend/service.yaml | kubectl apply -f -"
+            if (env.DEPLOY_BACKEND == 'true') {
+              deployTasks.backend = {
+                sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_BACKEND_IMAGE|${backendImage}|g' ${K8S_MANIFESTS_DIR}/backend/deployment.yaml | kubectl apply -f -"
+                sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/backend/service.yaml | kubectl apply -f -"
+              }
             }
-          }
 
-          if (deployTasks.isEmpty()) {
-            echo 'No application workloads selected for deployment.'
-          } else {
-            parallel deployTasks
-          }
+            if (deployTasks.isEmpty()) {
+              echo 'No application workloads selected for deployment.'
+            } else {
+              parallel deployTasks
+            }
 
-          sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/ingress/ingress-shopnow.yaml | kubectl apply -f -"
+            sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/ingress/ingress-shopnow.yaml | kubectl apply -f -"
 
-          sh 'kubectl rollout status deployment/mongo -n ${K8S_NAMESPACE} --timeout=5m'
-          if (env.DEPLOY_FRONTEND == 'true') {
-            sh 'kubectl rollout status deployment/frontend -n ${K8S_NAMESPACE} --timeout=5m'
-          }
-          if (env.DEPLOY_ADMIN == 'true') {
-            sh 'kubectl rollout status deployment/admin -n ${K8S_NAMESPACE} --timeout=5m'
-          }
-          if (env.DEPLOY_BACKEND == 'true') {
-            sh 'kubectl rollout status deployment/backend -n ${K8S_NAMESPACE} --timeout=5m'
-          }
+            sh 'kubectl rollout status deployment/mongo -n ${K8S_NAMESPACE} --timeout=5m'
+            if (env.DEPLOY_FRONTEND == 'true') {
+              sh 'kubectl rollout status deployment/frontend -n ${K8S_NAMESPACE} --timeout=5m'
+            }
+            if (env.DEPLOY_ADMIN == 'true') {
+              sh 'kubectl rollout status deployment/admin -n ${K8S_NAMESPACE} --timeout=5m'
+            }
+            if (env.DEPLOY_BACKEND == 'true') {
+              sh 'kubectl rollout status deployment/backend -n ${K8S_NAMESPACE} --timeout=5m'
+            }
 
-          if (params.ENABLE_MONITORING_CHECKS) {
-            sh 'kubectl create namespace ${MONITORING_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
-            sh "for file in ${MONITORING_DIR}/*.yaml; do sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' \"$file\" | kubectl apply -f -; done"
-            sh 'kubectl get pods -n ${MONITORING_NAMESPACE}'
-            sh 'kubectl get servicemonitor -n ${MONITORING_NAMESPACE} || true'
-            sh 'kubectl get prometheusrule -n ${MONITORING_NAMESPACE} || true'
-          }
+            if (params.ENABLE_MONITORING_CHECKS) {
+              sh 'kubectl create namespace ${MONITORING_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
+              sh "for file in ${MONITORING_DIR}/*.yaml; do sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' \"$file\" | kubectl apply -f -; done"
+              sh 'kubectl get pods -n ${MONITORING_NAMESPACE}'
+              sh 'kubectl get servicemonitor -n ${MONITORING_NAMESPACE} || true'
+              sh 'kubectl get prometheusrule -n ${MONITORING_NAMESPACE} || true'
+            }
 
-          sh 'kubectl get pods -n ${K8S_NAMESPACE} -o wide'
-          sh 'kubectl get svc -n ${K8S_NAMESPACE}'
-          sh 'kubectl get ingress -n ${K8S_NAMESPACE} || true'
+            sh 'kubectl get pods -n ${K8S_NAMESPACE} -o wide'
+            sh 'kubectl get svc -n ${K8S_NAMESPACE}'
+            sh 'kubectl get ingress -n ${K8S_NAMESPACE} || true'
+          }
         }
       }
     }
