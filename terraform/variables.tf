@@ -49,7 +49,7 @@ variable "management_key_name" {
 variable "state_bucket" {
   description = "S3 bucket name used to store Terraform state"
   type        = string
-  default     = "shopnow-terraform-state"
+  default     = "harish-terraform-state-bucket"
 }
 
 variable "lock_table" {

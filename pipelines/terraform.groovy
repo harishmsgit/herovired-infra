@@ -27,8 +27,8 @@ pipeline {
 
   parameters {
     string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region for provisioning')
-    string(name: 'TF_STATE_BUCKET', defaultValue: 'shopnow-terraform-state', description: 'S3 bucket for Terraform state')
-    string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'us-east-1', description: 'Region the Terraform state S3 bucket actually lives in')
+    string(name: 'TF_STATE_BUCKET', defaultValue: 'harish-terraform-state-bucket', description: 'S3 bucket for Terraform state')
+    string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'ap-south-1', description: 'Region the Terraform state S3 bucket actually lives in')
     string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
     string(name: 'ENVIRONMENT', defaultValue: 'dev', description: 'Deployment environment name')
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name used for discovery and downstream jobs')
@@ -71,8 +71,8 @@ pipeline {
           if (infraSupport) {
             env.AWS_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'AWS_REGION', 'us-east-1')
             env.TF_VAR_aws_region = env.AWS_REGION
-            env.TF_STATE_BUCKET = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET', 'shopnow-terraform-state')
-            env.TF_STATE_BUCKET_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET_REGION', 'us-east-1')
+            env.TF_STATE_BUCKET = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET', 'harish-terraform-state-bucket')
+            env.TF_STATE_BUCKET_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET_REGION', 'ap-south-1')
             env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', 'shopnow-terraform-locks')
             env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', 'java-spring-eks')
             env.ANSIBLE_JOB_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'ANSIBLE_JOB_NAME', 'shopnow-ansible-config')
