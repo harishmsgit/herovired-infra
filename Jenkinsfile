@@ -66,9 +66,8 @@ pipeline {
     string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'awsId', description: 'Jenkins AWS credentials ID')
     string(name: 'SSH_PRIVATE_KEY_CREDENTIALS_ID', defaultValue: 'management-ec2-ssh-key', description: 'SSH private key credentials for the management EC2 instance')
     string(name: 'REMOTE_USER', defaultValue: 'ubuntu', description: 'SSH user for the management EC2 instance')
-    booleanParam(name: 'RUN_TERRAFORM', defaultValue: true, description: 'Run Terraform when infra files change')
-    booleanParam(name: 'FORCE_TERRAFORM', defaultValue: false, description: 'Force run Terraform even if infra files have not changed')
-    booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Run Ansible after Terraform apply or when ansible files change')
+    booleanParam(name: 'RUN_TERRAFORM', defaultValue: true, description: 'Run Terraform to provision infrastructure')
+    booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Run Ansible for management host configuration')
     booleanParam(name: 'RUN_DEPLOYMENT', defaultValue: true, description: 'Deploy application workloads using current image tags')
     string(name: 'K8S_NAMESPACE', defaultValue: 'shopnow-ns', description: 'Kubernetes namespace for the application workloads')
     string(name: 'MONITORING_NAMESPACE', defaultValue: 'monitor-ns', description: 'Namespace for monitoring workloads')
@@ -407,7 +406,7 @@ pipeline {
 
     stage('Terraform') {
       when {
-        expression { return params.RUN_TERRAFORM && (env.TERRAFORM_CHANGED == 'true' || params.FORCE_TERRAFORM) }
+        expression { return params.RUN_TERRAFORM }
       }
       steps {
         script {
@@ -452,7 +451,7 @@ pipeline {
 
     stage('Provision Secrets') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY && env.TERRAFORM_CHANGED == 'true' }
+        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
       }
       steps {
         script {
@@ -466,7 +465,7 @@ pipeline {
 
     stage('Verify ExternalSecret Sync') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY && env.TERRAFORM_CHANGED == 'true' }
+        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
       }
       steps {
         script {
@@ -495,7 +494,7 @@ pipeline {
 
     stage('Generate Inventory') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY && (env.ANSIBLE_CHANGED == 'true' || env.TERRAFORM_CHANGED == 'true') }
+        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
       }
       steps {
         sh '''
@@ -511,7 +510,7 @@ pipeline {
 
     stage('Configure Management Host') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY && (env.ANSIBLE_CHANGED == 'true' || env.TERRAFORM_CHANGED == 'true') }
+        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
       }
       steps {
         script {
@@ -535,7 +534,7 @@ pipeline {
 
     stage('Deploy Application Workloads') {
       when {
-        expression { return params.RUN_DEPLOYMENT && (env.DEPLOY_FRONTEND == 'true' || env.DEPLOY_ADMIN == 'true' || env.DEPLOY_BACKEND == 'true') }
+        expression { return params.RUN_DEPLOYMENT && (params.DEPLOY_FRONTEND || params.DEPLOY_ADMIN || params.DEPLOY_BACKEND) }
       }
       steps {
         script {
