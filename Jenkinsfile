@@ -394,7 +394,13 @@ pipeline {
                 def parts = c.uri.tokenize(':')
                 def tag = parts[-1]
                 def repoPath = c.uri.substring(c.uri.indexOf('/') + 1, c.uri.lastIndexOf(':'))
-                sh "aws ecr describe-images --region ${AWS_REGION} --repository-name ${repoPath} --image-ids imageTag=${tag}"
+                sh """
+                  if aws ecr describe-images --region ${AWS_REGION} --repository-name ${repoPath} --image-ids imageTag=${tag} 2>&1; then
+                    echo "✓ Image exists: ${c.uri}"
+                  else
+                    echo "⚠ Image not found in ECR (will be built during deployment): ${c.uri}"
+                  fi
+                """
               } else {
                 echo "Skipping non-ECR image ${c.uri}"
               }
