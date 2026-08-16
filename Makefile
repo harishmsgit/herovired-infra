@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 # Defaults (override via environment or `make VAR=value`)
 AWS_REGION ?= ap-south-1
-AWS_ACCOUNT_ID ?= 495013583028
+AWS_ACCOUNT_ID ?= 559272000457
 ECR_REPO_PREFIX ?= shopnow
 SINGLE_ECR_REPOSITORY ?=
 IMAGE_TAG ?= latest

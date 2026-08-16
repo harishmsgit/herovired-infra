@@ -40,7 +40,7 @@ def buildPipelineContext(script) {
   def infraSupport = sharedInfra.support
   def sharedConfig = sharedInfra.config ?: [:]
 
-  def awsAccountId = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'AWS_ACCOUNT_ID', '495013583028') : (script.params.AWS_ACCOUNT_ID?.trim() ?: script.env.AWS_ACCOUNT_ID?.trim())
+  def awsAccountId = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'AWS_ACCOUNT_ID', '559272000457') : (script.params.AWS_ACCOUNT_ID?.trim() ?: script.env.AWS_ACCOUNT_ID?.trim())
   def awsRegion = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'AWS_REGION', 'ap-south-1') : (script.params.AWS_REGION?.trim() ?: script.env.AWS_REGION?.trim())
   def ecrRepoPrefix = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'ECR_REPO_PREFIX', 'shopnow') : (script.params.ECR_REPO_PREFIX?.trim() ?: script.env.ECR_REPO_PREFIX?.trim())
   def ecrRepositoryStrategy = infraSupport ? infraSupport.resolveConfigValue(script, sharedConfig, 'ECR_REPOSITORY_STRATEGY', 'service-repos') : (script.params.ECR_REPOSITORY_STRATEGY?.trim() ?: script.env.ECR_REPOSITORY_STRATEGY?.trim() ?: 'service-repos')
@@ -215,7 +215,7 @@ pipeline {
 
   parameters {
     string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region')
-    string(name: 'AWS_ACCOUNT_ID', defaultValue: '495013583028', description: 'AWS account ID for ECR registry')
+    string(name: 'AWS_ACCOUNT_ID', defaultValue: '559272000457', description: 'AWS account ID for ECR registry')
     string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'awsId', description: 'Jenkins AWS credentials ID')
     string(name: 'ECR_REPO_PREFIX', defaultValue: 'shopnow', description: 'ECR repository prefix, for example <your-username>-shopnow')
     choice(name: 'ECR_REPOSITORY_STRATEGY', choices: ['service-repos', 'single-repo'], description: 'Use service repositories (<prefix>/frontend) or one shared repository (<repo>:frontend-<tag>)')
@@ -223,7 +223,7 @@ pipeline {
     choice(name: 'ECR_IMAGE_TAG_MUTABILITY', choices: ['MUTABLE', 'IMMUTABLE'], description: 'Tag mutability to use when creating ECR repositories')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Docker image tag; defaults to BUILD_NUMBER-gitsha')
     string(name: 'USER_NAME', defaultValue: 'harish', description: 'Frontend and admin build arg used for public path customization')
-    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name')
+    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'shopnow-app-eks', description: 'EKS cluster name')
     string(name: 'K8S_NAMESPACE', defaultValue: 'shopnow-ns', description: 'Kubernetes namespace')
     string(name: 'MONITORING_NAMESPACE', defaultValue: 'monitor-ns', description: 'Namespace where Prometheus/Grafana stack is running')
     string(name: 'MONITORING_RELEASE_NAME', defaultValue: 'prometheus', description: 'Helm release name for kube-prometheus-stack')

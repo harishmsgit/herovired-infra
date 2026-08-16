@@ -29,7 +29,7 @@ Usage (example):
 # required variables
 AWS_ACCOUNT_ID=123456789012
 REGION=ap-south-1
-CLUSTER_NAME=shopnow-eks
+CLUSTER_NAME=shopnow-app-eks
 SERVICE_ACCOUNT_NAMESPACE=external-secrets
 SERVICE_ACCOUNT_NAME=external-secrets
 ROLE_NAME=external-secrets-role

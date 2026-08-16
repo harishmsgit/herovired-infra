@@ -37,7 +37,7 @@ variable "allowed_ssh_cidr" {
 variable "cluster_name" {
   description = "Name of the EKS cluster"
   type        = string
-  default     = "shopnow-eks"
+  default     = "shopnow-app-eks"
 }
 
 variable "management_key_name" {

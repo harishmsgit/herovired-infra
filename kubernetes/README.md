@@ -11,7 +11,7 @@ helm repo update
 helm upgrade --install external-secrets external-secrets/kubernetes-external-secrets --namespace external-secrets --set installCRDs=true
 
 # Create IAM role for ESO (example):
-scripts/create_iam_role_for_external_secrets.sh 123456789012 ap-south-1 shopnow-eks external-secrets external-secrets external-secrets-role
+scripts/create_iam_role_for_external_secrets.sh 123456789012 ap-south-1 shopnow-app-eks external-secrets external-secrets external-secrets-role
 # then annotate the service account (script prints the command)
 
 # Bootstrap the MongoDB secret in AWS Secrets Manager:

@@ -48,11 +48,11 @@ pipeline {
 
   parameters {
     string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region used by Terraform and EKS')
-    string(name: 'AWS_ACCOUNT_ID', defaultValue: '495013583028', description: 'AWS account used for shared infra lookups')
+    string(name: 'AWS_ACCOUNT_ID', defaultValue: '559272000457', description: 'AWS account used for shared infra lookups')
     string(name: 'TF_STATE_BUCKET', defaultValue: 'harish-terraform-state-bucket', description: 'S3 bucket for Terraform state')
     string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'ap-south-1', description: 'Region the Terraform state S3 bucket actually lives in (may differ from AWS_REGION)')
     string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
-    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name')
+    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'shopnow-app-eks', description: 'EKS cluster name')
     string(name: 'ECR_REPO_PREFIX', defaultValue: 'shopnow-dev', description: 'ECR repository prefix for the current environment (dev/prod)')
     choice(name: 'ECR_REPOSITORY_STRATEGY', choices: ['service-repos', 'single-repo'], description: 'Use service repositories (<prefix>/frontend) or one shared repository (<repo>:frontend-<tag>)')
     string(name: 'SINGLE_ECR_REPOSITORY', defaultValue: '', description: 'Shared ECR repository name for single-repo mode, for example shopnow-ecr-21-07-2027')

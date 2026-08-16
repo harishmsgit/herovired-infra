@@ -22,7 +22,7 @@ pipeline {
     string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'ap-south-1', description: 'Region the Terraform state S3 bucket actually lives in')
     string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
     string(name: 'ENVIRONMENT', defaultValue: 'dev', description: 'Terraform workspace/environment to read outputs from')
-    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name used when Terraform outputs are unavailable')
+    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'shopnow-app-eks', description: 'EKS cluster name used when Terraform outputs are unavailable')
     string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'awsId', description: 'Jenkins AWS credentials ID')
     string(name: 'SSH_PRIVATE_KEY_CREDENTIALS_ID', defaultValue: 'management-ec2-ssh-key', description: 'Jenkins SSH private key credentials for the management EC2 instance')
     string(name: 'REMOTE_USER', defaultValue: 'ubuntu', description: 'SSH user for the management EC2 instance')
@@ -64,7 +64,7 @@ pipeline {
             env.TF_STATE_BUCKET = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET', 'harish-terraform-state-bucket')
             env.TF_STATE_BUCKET_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET_REGION', 'ap-south-1')
             env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', 'shopnow-terraform-locks')
-            env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', 'java-spring-eks')
+            env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', 'shopnow-app-eks')
             env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', 'ubuntu')
             env.SSH_PRIVATE_KEY_CREDENTIALS_ID = infraSupport.resolveConfigValue(this, sharedConfig, 'SSH_PRIVATE_KEY_CREDENTIALS_ID', 'management-ec2-ssh-key')
           }
