@@ -122,15 +122,27 @@ pipeline {
               sh '''
                 set -e
                 if ! aws s3api head-bucket --bucket ${TF_STATE_BUCKET} --region ${TF_STATE_BUCKET_REGION} 2>/dev/null; then
+                  echo "Terraform S3 backend bucket ${TF_STATE_BUCKET} not found. Attempting creation."
                   if [ "${TF_STATE_BUCKET_REGION}" = "us-east-1" ]; then
-                    aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${TF_STATE_BUCKET_REGION}
+                    if ! aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${TF_STATE_BUCKET_REGION}; then
+                      echo "Bucket ${TF_STATE_BUCKET} already exists or was created concurrently; continuing."
+                    fi
                   else
-                    aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${TF_STATE_BUCKET_REGION} --create-bucket-configuration LocationConstraint=${TF_STATE_BUCKET_REGION}
+                    if ! aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${TF_STATE_BUCKET_REGION} --create-bucket-configuration LocationConstraint=${TF_STATE_BUCKET_REGION}; then
+                      echo "Bucket ${TF_STATE_BUCKET} already exists or was created concurrently; continuing."
+                    fi
                   fi
+                else
+                  echo "Terraform S3 backend bucket ${TF_STATE_BUCKET} already exists; skipping creation."
                 fi
 
                 if ! aws dynamodb describe-table --table-name ${LOCK_TABLE} --region ${AWS_REGION} 2>/dev/null; then
-                  aws dynamodb create-table --table-name ${LOCK_TABLE} --attribute-definitions AttributeName=LockID,AttributeType=S --key-schema AttributeName=LockID,KeyType=HASH --billing-mode PAY_PER_REQUEST --region ${AWS_REGION}
+                  echo "Terraform lock table ${LOCK_TABLE} not found. Attempting creation."
+                  if ! aws dynamodb create-table --table-name ${LOCK_TABLE} --attribute-definitions AttributeName=LockID,AttributeType=S --key-schema AttributeName=LockID,KeyType=HASH --billing-mode PAY_PER_REQUEST --region ${AWS_REGION}; then
+                    echo "Lock table ${LOCK_TABLE} already exists or was created concurrently; continuing."
+                  fi
+                else
+                  echo "Terraform lock table ${LOCK_TABLE} already exists; skipping creation."
                 fi
               '''
             }

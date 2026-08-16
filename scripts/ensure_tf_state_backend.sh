@@ -14,28 +14,38 @@ if aws s3api head-bucket --bucket "$TF_STATE_BUCKET" --region "$AWS_REGION" >/de
   echo "S3 bucket already exists: s3://$TF_STATE_BUCKET"
 else
   echo "S3 bucket does not exist. Creating: s3://$TF_STATE_BUCKET"
-  aws s3 mb "s3://$TF_STATE_BUCKET" --region "$AWS_REGION" --no-cli-pager
-  aws s3api put-bucket-versioning \
+  if ! aws s3 mb "s3://$TF_STATE_BUCKET" --region "$AWS_REGION" --no-cli-pager; then
+    echo "S3 bucket creation reported a conflict; continuing because the backend may already exist."
+  fi
+
+  if ! aws s3api put-bucket-versioning \
     --bucket "$TF_STATE_BUCKET" \
     --versioning-configuration Status=Enabled \
-    --region "$AWS_REGION"
-  aws s3api put-bucket-encryption \
+    --region "$AWS_REGION"; then
+    echo "Bucket versioning update skipped because the bucket is already available or the request was not needed."
+  fi
+
+  if ! aws s3api put-bucket-encryption \
     --bucket "$TF_STATE_BUCKET" \
     --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' \
-    --region "$AWS_REGION"
+    --region "$AWS_REGION"; then
+    echo "Bucket encryption update skipped because the bucket is already configured or already exists."
+  fi
 fi
 
 if aws dynamodb describe-table --table-name "$LOCK_TABLE" --region "$AWS_REGION" >/dev/null 2>&1; then
   echo "DynamoDB lock table already exists: $LOCK_TABLE"
 else
   echo "DynamoDB lock table does not exist. Creating: $LOCK_TABLE"
-  aws dynamodb create-table \
+  if ! aws dynamodb create-table \
     --table-name "$LOCK_TABLE" \
     --attribute-definitions AttributeName=LockID,AttributeType=S \
     --key-schema AttributeName=LockID,KeyType=HASH \
     --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
     --region "$AWS_REGION" \
-    --no-cli-pager
+    --no-cli-pager; then
+    echo "DynamoDB lock table already exists or was created concurrently; continuing."
+  fi
 fi
 
 echo "Terraform backend is ready."
