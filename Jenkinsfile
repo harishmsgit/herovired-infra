@@ -259,7 +259,7 @@ pipeline {
           env.PATH = "${env.LOCAL_TOOLS_BIN}:${env.PATH}"
 
           sh '''
-            set -euo pipefail
+            set -eu
             mkdir -p "${LOCAL_TOOLS_BIN}"
             missing=""
             for cmd in kubectl helm aws; do
