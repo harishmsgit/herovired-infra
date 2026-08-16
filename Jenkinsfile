@@ -474,7 +474,7 @@ pipeline {
                   -backend-config="bucket=${TF_STATE_BUCKET}" \
                   -backend-config="key=terraform/terraform.tfstate" \
                   -backend-config="region=${TF_STATE_BUCKET_REGION}" \
-                  -backend-config="dynamodb_table=${LOCK_TABLE}"
+                  -backend-config="use_lockfile=true"
 
                 # Recover from stale Terraform state checksum mismatches between S3 and DynamoDB.
                 # This is safe when the state already matches the real infra resources and the lock
@@ -489,7 +489,7 @@ pipeline {
                       -backend-config="bucket=${TF_STATE_BUCKET}" \
                       -backend-config="key=terraform/terraform.tfstate" \
                       -backend-config="region=${TF_STATE_BUCKET_REGION}" \
-                      -backend-config="dynamodb_table=${LOCK_TABLE}"
+                      -backend-config="use_lockfile=true"
                   fi
                 fi
 
