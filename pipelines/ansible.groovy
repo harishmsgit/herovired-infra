@@ -133,7 +133,6 @@ pipeline {
                   -backend-config="bucket=${TF_STATE_BUCKET}" \
                   -backend-config="key=terraform/terraform.tfstate" \
                   -backend-config="region=${TF_STATE_BUCKET_REGION}" \
-                  -backend-config="use_lockfile=true" \
                   -backend-config="dynamodb_table=${LOCK_TABLE}"
                 terraform workspace select ${ENVIRONMENT}
                 terraform workspace show
