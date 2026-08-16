@@ -34,7 +34,7 @@ def buildImageUri(String accountId, String region, String repoPrefix, String ser
   def registry = "${accountId}.dkr.ecr.${region}.amazonaws.com"
   def strategy = repositoryStrategy?.trim()
   def sharedRepo = singleRepository?.trim()
-  def tag = (imageTag?.trim() && imageTag.trim() != 'null') ? imageTag.trim() : 'latest'
+  def tag = (imageTag?.trim() && imageTag.trim() != 'null') ? imageTag.trim() : 'manual'
 
   if (strategy == 'single-repo' || sharedRepo) {
     def repoName = sharedRepo ?: repoPrefix
