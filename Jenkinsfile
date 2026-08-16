@@ -420,6 +420,9 @@ pipeline {
             dir(env.TERRAFORM_DIR) {
               sh '''
                 set -e
+                export TF_PLUGIN_CACHE_DIR="$HOME/.terraform.d/plugin-cache"
+                export TF_INPUT=false
+                mkdir -p "$TF_PLUGIN_CACHE_DIR"
                 if ! aws s3api head-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION} 2>/dev/null; then
                   if [ "${AWS_REGION}" = "us-east-1" ]; then
                     aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION}
@@ -441,12 +444,29 @@ pipeline {
 
                 terraform workspace select -or-create ${ENVIRONMENT:-dev} || terraform workspace select default
                 terraform validate
-                terraform plan \
-                  -var="aws_region=${AWS_REGION}" \
-                  -var="cluster_name=${EKS_CLUSTER_NAME}" \
-                  -var="ecr_repo_prefix=${ECR_REPO_PREFIX}" \
-                  -out=tfplan
-                terraform apply -auto-approve tfplan
+                
+                # Retry terraform plan to handle plugin initialization timeouts
+                for attempt in 1 2 3; do
+                  echo "Terraform plan attempt $attempt/3..."
+                  if terraform plan \
+                    -var="aws_region=${AWS_REGION}" \
+                    -var="cluster_name=${EKS_CLUSTER_NAME}" \
+                    -var="ecr_repo_prefix=${ECR_REPO_PREFIX}" \
+                    -parallelism=2 \
+                    -out=tfplan; then
+                    echo "Terraform plan succeeded on attempt $attempt"
+                    break
+                  else
+                    if [ $attempt -eq 3 ]; then
+                      echo "Terraform plan failed after 3 attempts" >&2
+                      exit 1
+                    fi
+                    echo "Attempt $attempt failed, retrying in 30 seconds..."
+                    sleep 30
+                  fi
+                done
+                
+                terraform apply -auto-approve -parallelism=2 tfplan
                 terraform output -json > ${TF_OUTPUT_FILE}
               '''
             }
