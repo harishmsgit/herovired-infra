@@ -175,9 +175,9 @@ resource "aws_iam_role_policy_attachment" "cni_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 }
 
-resource "aws_iam_role_policy_attachment" "ecr_readonly_policy" {
+resource "aws_iam_role_policy_attachment" "ecr_full_access_policy" {
   role       = aws_iam_role.eks_node_group.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
 }
 
 resource "aws_iam_role_policy_attachment" "ssm_policy" {
@@ -213,9 +213,9 @@ resource "aws_iam_role_policy_attachment" "management_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-resource "aws_iam_role_policy_attachment" "management_ecr_readonly" {
+resource "aws_iam_role_policy_attachment" "management_ecr_full_access" {
   role       = aws_iam_role.management.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
 }
 
 resource "aws_iam_role_policy_attachment" "management_eks_access" {
@@ -261,7 +261,7 @@ resource "aws_eks_node_group" "main" {
   depends_on = [
     aws_iam_role_policy_attachment.node_policy,
     aws_iam_role_policy_attachment.cni_policy,
-    aws_iam_role_policy_attachment.ecr_readonly_policy,
+    aws_iam_role_policy_attachment.ecr_full_access_policy,
     aws_iam_role_policy_attachment.ssm_policy,
   ]
 
