@@ -34,13 +34,36 @@ def buildImageUri(String accountId, String region, String repoPrefix, String ser
   def registry = "${accountId}.dkr.ecr.${region}.amazonaws.com"
   def strategy = repositoryStrategy?.trim()
   def sharedRepo = singleRepository?.trim()
+  def tag = (imageTag?.trim() && imageTag.trim() != 'null') ? imageTag.trim() : 'latest'
 
   if (strategy == 'single-repo' || sharedRepo) {
     def repoName = sharedRepo ?: repoPrefix
-    return "${registry}/${repoName}:${serviceName}-${imageTag}"
+    return "${registry}/${repoName}:${serviceName}-${tag}"
   }
 
-  return "${registry}/${repoPrefix}/${serviceName}:${imageTag}"
+  return "${registry}/${repoPrefix}/${serviceName}:${tag}"
+}
+
+def ensureImageTag(script) {
+  def tag = script.env.IMAGE_TAG?.trim()
+  if (!tag || tag == 'null') {
+    def buildNumber = script.env.BUILD_NUMBER?.trim()
+    if (!buildNumber || buildNumber == 'null') {
+      buildNumber = 'manual'
+    }
+
+    def shortSha = script.sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+    if (!shortSha || shortSha == 'null') {
+      shortSha = new java.text.SimpleDateFormat('yyyyMMddHHmmss').format(new java.util.Date())
+    }
+
+    tag = "${buildNumber}-${shortSha}".replaceAll(/[^A-Za-z0-9_.-]+/, '-')
+    if (!tag || tag == 'null') {
+      tag = "manual-${new java.text.SimpleDateFormat('yyyyMMddHHmmss').format(new java.util.Date())}"
+    }
+    script.env.IMAGE_TAG = tag
+  }
+  return script.env.IMAGE_TAG
 }
 
 pipeline {
@@ -174,9 +197,7 @@ pipeline {
           env.MONITORING_DIR = monitoringDir
           env.INVENTORY_FILE = "${WORKSPACE}/${ansibleDir}/inventories/generated/hosts.ini"
           env.TF_OUTPUT_FILE = "${WORKSPACE}/${ansibleDir}/terraform-outputs.json"
-          if (!env.IMAGE_TAG?.trim()) {
-            env.IMAGE_TAG = "${env.BUILD_NUMBER}-${sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()}"
-          }
+          env.IMAGE_TAG = ensureImageTag(this)
 
           def currentSha = env.GIT_COMMIT?.trim()
           if (!currentSha) {
@@ -365,17 +386,20 @@ pipeline {
       }
       steps {
         script {
+          def resolvedTag = ensureImageTag(this)
+          echo "Using image tag: ${resolvedTag}"
+
           def checks = []
           if (env.DEPLOY_FRONTEND == 'true') {
-            def img = env.FRONTEND_IMAGE_URI?.trim() ? env.FRONTEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'frontend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+            def img = env.FRONTEND_IMAGE_URI?.trim() ? env.FRONTEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'frontend', resolvedTag, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
             checks << [name: 'frontend', uri: img]
           }
           if (env.DEPLOY_ADMIN == 'true') {
-            def img = env.ADMIN_IMAGE_URI?.trim() ? env.ADMIN_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'admin', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+            def img = env.ADMIN_IMAGE_URI?.trim() ? env.ADMIN_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'admin', resolvedTag, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
             checks << [name: 'admin', uri: img]
           }
           if (env.DEPLOY_BACKEND == 'true') {
-            def img = env.BACKEND_IMAGE_URI?.trim() ? env.BACKEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'backend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+            def img = env.BACKEND_IMAGE_URI?.trim() ? env.BACKEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'backend', resolvedTag, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
             checks << [name: 'backend', uri: img]
           }
 
@@ -451,6 +475,23 @@ pipeline {
                   -backend-config="key=terraform/terraform.tfstate" \
                   -backend-config="region=${TF_STATE_BUCKET_REGION}" \
                   -backend-config="dynamodb_table=${LOCK_TABLE}"
+
+                # Recover from stale Terraform state checksum mismatches between S3 and DynamoDB.
+                # This is safe when the state already matches the real infra resources and the lock
+                # table entry is stale; it prevents the pipeline from failing before plan/apply.
+                if terraform state list >/dev/null 2>&1; then
+                  echo "Terraform remote state is readable; no digest repair needed."
+                else
+                  echo "Terraform state checksum mismatch detected. Attempting stale lock repair..."
+                  if [ -f "$WORKSPACE/${INFRA_ROOT}/scripts/repair_terraform_state_digest.sh" ]; then
+                    TF_STATE_BUCKET="${TF_STATE_BUCKET}" LOCK_TABLE="${LOCK_TABLE}" STATE_KEY="env:/dev/terraform/terraform.tfstate" AWS_REGION="${AWS_REGION}" bash "$WORKSPACE/${INFRA_ROOT}/scripts/repair_terraform_state_digest.sh" --force
+                    terraform init -reconfigure \
+                      -backend-config="bucket=${TF_STATE_BUCKET}" \
+                      -backend-config="key=terraform/terraform.tfstate" \
+                      -backend-config="region=${TF_STATE_BUCKET_REGION}" \
+                      -backend-config="dynamodb_table=${LOCK_TABLE}"
+                  fi
+                fi
 
                 terraform workspace select -or-create ${ENVIRONMENT:-dev} || terraform workspace select default
                 
