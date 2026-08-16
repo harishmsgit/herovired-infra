@@ -49,7 +49,7 @@ pipeline {
   parameters {
     string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region used by Terraform and EKS')
     string(name: 'AWS_ACCOUNT_ID', defaultValue: '559272000457', description: 'AWS account used for shared infra lookups')
-    string(name: 'TF_STATE_BUCKET', defaultValue: 'harish-terraform-state-bucket', description: 'S3 bucket for Terraform state')
+    string(name: 'TF_STATE_BUCKET', defaultValue: 'harish-pc-s3-bucket', description: 'S3 bucket for Terraform state')
     string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'ap-south-1', description: 'Region the Terraform state S3 bucket actually lives in (may differ from AWS_REGION)')
     string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'shopnow-app-eks', description: 'EKS cluster name')
