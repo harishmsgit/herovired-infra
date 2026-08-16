@@ -46,37 +46,6 @@ def buildImageUri(String accountId, String region, String repoPrefix, String ser
 pipeline {
   agent any
 
-  parameters {
-    string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region used by Terraform and EKS')
-    string(name: 'AWS_ACCOUNT_ID', defaultValue: '559272000457', description: 'AWS account used for shared infra lookups')
-    string(name: 'TF_STATE_BUCKET', defaultValue: 'harish-pc-s3-bucket', description: 'S3 bucket for Terraform state')
-    string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'ap-south-1', description: 'Region the Terraform state S3 bucket actually lives in (may differ from AWS_REGION)')
-    string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
-    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'shopnow-app-eks', description: 'EKS cluster name')
-    string(name: 'ECR_REPO_PREFIX', defaultValue: 'shopnow-dev', description: 'ECR repository prefix for the current environment (dev/prod)')
-    choice(name: 'ECR_REPOSITORY_STRATEGY', choices: ['service-repos', 'single-repo'], description: 'Use service repositories (<prefix>/frontend) or one shared repository (<repo>:frontend-<tag>)')
-    string(name: 'SINGLE_ECR_REPOSITORY', defaultValue: '', description: 'Shared ECR repository name for single-repo mode, for example shopnow-ecr-21-07-2027')
-    string(name: 'FRONTEND_IMAGE_URI', defaultValue: '', description: 'Optional explicit frontend image URI (overrides computed URI)')
-    string(name: 'ADMIN_IMAGE_URI', defaultValue: '', description: 'Optional explicit admin image URI (overrides computed URI)')
-    string(name: 'BACKEND_IMAGE_URI', defaultValue: '', description: 'Optional explicit backend image URI (overrides computed URI)')
-    string(name: 'IMAGE_TAG', defaultValue: '', description: 'Image tag to deploy; defaults to build number and git SHA')
-    booleanParam(name: 'DEPLOY_FRONTEND', defaultValue: false, description: 'Deploy the frontend service')
-    booleanParam(name: 'DEPLOY_ADMIN', defaultValue: false, description: 'Deploy the admin service')
-    booleanParam(name: 'DEPLOY_BACKEND', defaultValue: false, description: 'Deploy the backend service')
-    string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'awsId', description: 'Jenkins AWS credentials ID')
-    string(name: 'SSH_PRIVATE_KEY_CREDENTIALS_ID', defaultValue: 'management-ec2-ssh-key', description: 'SSH private key credentials for the management EC2 instance')
-    string(name: 'REMOTE_USER', defaultValue: 'ubuntu', description: 'SSH user for the management EC2 instance')
-    booleanParam(name: 'RUN_TERRAFORM', defaultValue: true, description: 'Run Terraform to provision infrastructure')
-    booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Run Ansible for management host configuration')
-    booleanParam(name: 'RUN_DEPLOYMENT', defaultValue: true, description: 'Deploy application workloads using current image tags')
-    string(name: 'K8S_NAMESPACE', defaultValue: 'shopnow-ns', description: 'Kubernetes namespace for the application workloads')
-    string(name: 'MONITORING_NAMESPACE', defaultValue: 'monitor-ns', description: 'Namespace for monitoring workloads')
-    string(name: 'MONITORING_RELEASE_NAME', defaultValue: 'prometheus', description: 'Monitoring release name')
-    string(name: 'GRAFANA_ADMIN_PASSWORD', defaultValue: 'dev-grafana-admin', description: 'Grafana admin password')
-    booleanParam(name: 'ENABLE_MONITORING_CHECKS', defaultValue: true, description: 'Apply monitoring manifests and verify monitoring health')
-    booleanParam(name: 'AUTO_INSTALL_CLI_TOOLS', defaultValue: true, description: 'If true, attempt to auto-install missing CLI tools (kubectl/helm/aws) on the agent')
-  }
-
   options {
     skipDefaultCheckout()
     timestamps()
@@ -86,19 +55,34 @@ pipeline {
   }
 
   environment {
-    AWS_ACCOUNT_ID = "${params.AWS_ACCOUNT_ID}"
-    TF_STATE_BUCKET_REGION = "${params.TF_STATE_BUCKET_REGION}"
-    ECR_REPO_PREFIX = "${params.ECR_REPO_PREFIX}"
-    ECR_REPOSITORY_STRATEGY = "${params.ECR_REPOSITORY_STRATEGY}"
-    SINGLE_ECR_REPOSITORY = "${params.SINGLE_ECR_REPOSITORY}"
-    FRONTEND_IMAGE_URI = "${params.FRONTEND_IMAGE_URI}"
-    ADMIN_IMAGE_URI = "${params.ADMIN_IMAGE_URI}"
-    BACKEND_IMAGE_URI = "${params.BACKEND_IMAGE_URI}"
-    K8S_NAMESPACE = "${params.K8S_NAMESPACE}"
-    MONITORING_NAMESPACE = "${params.MONITORING_NAMESPACE}"
-    MONITORING_RELEASE_NAME = "${params.MONITORING_RELEASE_NAME}"
-    GRAFANA_ADMIN_PASSWORD = "${params.GRAFANA_ADMIN_PASSWORD}"
-    AUTO_INSTALL_CLI_TOOLS = "${params.AUTO_INSTALL_CLI_TOOLS}"
+    AWS_REGION = 'ap-south-1'
+    AWS_ACCOUNT_ID = '559272000457'
+    AWS_CREDENTIALS_ID = 'awsId'
+    TF_STATE_BUCKET = 'harish-pc-s3-bucket'
+    TF_STATE_BUCKET_REGION = 'ap-south-1'
+    LOCK_TABLE = 'shopnow-terraform-locks'
+    EKS_CLUSTER_NAME = 'shopnow-app-eks'
+    ECR_REPO_PREFIX = 'shopnow-dev'
+    ECR_REPOSITORY_STRATEGY = 'service-repos'
+    SINGLE_ECR_REPOSITORY = ''
+    FRONTEND_IMAGE_URI = ''
+    ADMIN_IMAGE_URI = ''
+    BACKEND_IMAGE_URI = ''
+    IMAGE_TAG = ''
+    DEPLOY_FRONTEND = 'true'
+    DEPLOY_ADMIN = 'true'
+    DEPLOY_BACKEND = 'true'
+    SSH_PRIVATE_KEY_CREDENTIALS_ID = 'management-ec2-ssh-key'
+    REMOTE_USER = 'ubuntu'
+    RUN_TERRAFORM = 'true'
+    RUN_ANSIBLE_AFTER_APPLY = 'true'
+    RUN_DEPLOYMENT = 'true'
+    K8S_NAMESPACE = 'shopnow-ns'
+    MONITORING_NAMESPACE = 'monitor-ns'
+    MONITORING_RELEASE_NAME = 'prometheus'
+    GRAFANA_ADMIN_PASSWORD = 'dev-grafana-admin'
+    ENABLE_MONITORING_CHECKS = 'true'
+    AUTO_INSTALL_CLI_TOOLS = 'true'
     // AWS_REGION, TF_STATE_BUCKET, LOCK_TABLE, EKS_CLUSTER_NAME, REMOTE_USER,
     // SSH_PRIVATE_KEY_CREDENTIALS_ID, IMAGE_TAG, INFRA_ROOT, APP_ROOT, TERRAFORM_DIR,
     // ANSIBLE_DIR, K8S_MANIFESTS_DIR, MONITORING_DIR, INVENTORY_FILE, TF_OUTPUT_FILE,
@@ -123,21 +107,21 @@ pipeline {
           def infraSupport = sharedInfra.support
           def sharedConfig = sharedInfra.config ?: [:]
 
-          env.AWS_REGION = params.AWS_REGION
-          env.TF_STATE_BUCKET = params.TF_STATE_BUCKET
-          env.LOCK_TABLE = params.LOCK_TABLE
-          env.EKS_CLUSTER_NAME = params.EKS_CLUSTER_NAME
-          env.REMOTE_USER = params.REMOTE_USER
-          env.SSH_PRIVATE_KEY_CREDENTIALS_ID = params.SSH_PRIVATE_KEY_CREDENTIALS_ID
-          env.IMAGE_TAG = params.IMAGE_TAG
+          env.AWS_REGION = env.AWS_REGION
+          env.TF_STATE_BUCKET = env.TF_STATE_BUCKET
+          env.LOCK_TABLE = env.LOCK_TABLE
+          env.EKS_CLUSTER_NAME = env.EKS_CLUSTER_NAME
+          env.REMOTE_USER = env.REMOTE_USER
+          env.SSH_PRIVATE_KEY_CREDENTIALS_ID = env.SSH_PRIVATE_KEY_CREDENTIALS_ID
+          env.IMAGE_TAG = env.IMAGE_TAG
 
           if (infraSupport) {
-            env.AWS_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'AWS_REGION', params.AWS_REGION)
-            env.TF_STATE_BUCKET = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET', params.TF_STATE_BUCKET)
-            env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', params.LOCK_TABLE)
-            env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', params.EKS_CLUSTER_NAME)
-            env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', params.REMOTE_USER)
-            env.SSH_PRIVATE_KEY_CREDENTIALS_ID = infraSupport.resolveConfigValue(this, sharedConfig, 'SSH_PRIVATE_KEY_CREDENTIALS_ID', params.SSH_PRIVATE_KEY_CREDENTIALS_ID)
+            env.AWS_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'AWS_REGION', env.AWS_REGION)
+            env.TF_STATE_BUCKET = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET', env.TF_STATE_BUCKET)
+            env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', env.LOCK_TABLE)
+            env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', env.EKS_CLUSTER_NAME)
+            env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', env.REMOTE_USER)
+            env.SSH_PRIVATE_KEY_CREDENTIALS_ID = infraSupport.resolveConfigValue(this, sharedConfig, 'SSH_PRIVATE_KEY_CREDENTIALS_ID', env.SSH_PRIVATE_KEY_CREDENTIALS_ID)
           }
 
           def infraRootProbe = sh(
@@ -231,9 +215,9 @@ pipeline {
           echo "Terraform dir: ${terraformDir}"
           echo "Ansible dir: ${ansibleDir}"
 
-          def deployFrontend = params.DEPLOY_FRONTEND
-          def deployAdmin = params.DEPLOY_ADMIN
-          def deployBackend = params.DEPLOY_BACKEND
+          def deployFrontend = env.DEPLOY_FRONTEND == 'true'
+          def deployAdmin = env.DEPLOY_ADMIN == 'true'
+          def deployBackend = env.DEPLOY_BACKEND == 'true'
           if (terraformChanged) {
             deployFrontend = true
             deployAdmin = true
@@ -360,7 +344,7 @@ pipeline {
     stage('Validate AWS Access') {
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh 'aws sts get-caller-identity --region ${AWS_REGION}'
           }
         }
@@ -369,25 +353,25 @@ pipeline {
 
     stage('Verify Images') {
       when {
-        expression { return params.RUN_DEPLOYMENT && (params.DEPLOY_FRONTEND || params.DEPLOY_ADMIN || params.DEPLOY_BACKEND) }
+        expression { return env.RUN_DEPLOYMENT == 'true' && (env.DEPLOY_FRONTEND == 'true' || env.DEPLOY_ADMIN == 'true' || env.DEPLOY_BACKEND == 'true') }
       }
       steps {
         script {
           def checks = []
-          if (params.DEPLOY_FRONTEND) {
+          if (env.DEPLOY_FRONTEND == 'true') {
             def img = env.FRONTEND_IMAGE_URI?.trim() ? env.FRONTEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'frontend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
             checks << [name: 'frontend', uri: img]
           }
-          if (params.DEPLOY_ADMIN) {
+          if (env.DEPLOY_ADMIN == 'true') {
             def img = env.ADMIN_IMAGE_URI?.trim() ? env.ADMIN_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'admin', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
             checks << [name: 'admin', uri: img]
           }
-          if (params.DEPLOY_BACKEND) {
+          if (env.DEPLOY_BACKEND == 'true') {
             def img = env.BACKEND_IMAGE_URI?.trim() ? env.BACKEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'backend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
             checks << [name: 'backend', uri: img]
           }
 
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             checks.each { c ->
               echo "Verifying image for ${c.name}: ${c.uri}"
               if (c.uri.contains('.dkr.ecr.')) {
@@ -395,10 +379,15 @@ pipeline {
                 def tag = parts[-1]
                 def repoPath = c.uri.substring(c.uri.indexOf('/') + 1, c.uri.lastIndexOf(':'))
                 sh """
-                  if aws ecr describe-images --region ${AWS_REGION} --repository-name ${repoPath} --image-ids imageTag=${tag} 2>&1; then
+                  set +e
+                  aws ecr describe-images --region ${AWS_REGION} --repository-name "${repoPath}" --image-ids imageTag="${tag}" >/tmp/verify-image-${c.name}.log 2>&1
+                  status=\$?
+                  cat /tmp/verify-image-${c.name}.log
+                  if [ \$status -eq 0 ]; then
                     echo "✓ Image exists: ${c.uri}"
                   else
                     echo "⚠ Image not found in ECR (will be built during deployment): ${c.uri}"
+                    echo "AWS CLI exit code: \$status"
                   fi
                 """
               } else {
@@ -412,11 +401,11 @@ pipeline {
 
     stage('Terraform') {
       when {
-        expression { return params.RUN_TERRAFORM }
+        expression { return env.RUN_TERRAFORM == 'true' }
       }
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             dir(env.TERRAFORM_DIR) {
               sh '''
                 set -e
@@ -466,11 +455,11 @@ pipeline {
 
     stage('Provision Secrets') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
       }
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             def secretScript = env.INFRA_ROOT == '.' ? "$WORKSPACE/scripts/create_aws_secret.sh" : "$WORKSPACE/${env.INFRA_ROOT}/scripts/create_aws_secret.sh"
             sh "${secretScript} shopnow/mongo ${AWS_REGION}"
           }
@@ -480,11 +469,11 @@ pipeline {
 
     stage('Verify ExternalSecret Sync') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
       }
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh '''
               set -e
               # wait for ExternalSecret to create the k8s secret (timeout 120s)
@@ -509,7 +498,7 @@ pipeline {
 
     stage('Generate Inventory') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
       }
       steps {
         sh '''
@@ -525,11 +514,11 @@ pipeline {
 
     stage('Configure Management Host') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
       }
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}'
           }
           sh '''
@@ -549,7 +538,7 @@ pipeline {
 
     stage('Deploy Application Workloads') {
       when {
-        expression { return params.RUN_DEPLOYMENT && (params.DEPLOY_FRONTEND || params.DEPLOY_ADMIN || params.DEPLOY_BACKEND) }
+        expression { return env.RUN_DEPLOYMENT == 'true' && (env.DEPLOY_FRONTEND == 'true' || env.DEPLOY_ADMIN == 'true' || env.DEPLOY_BACKEND == 'true') }
       }
       steps {
         script {
@@ -607,7 +596,7 @@ pipeline {
               sh 'kubectl rollout status deployment/backend -n ${K8S_NAMESPACE} --timeout=5m'
             }
 
-            if (params.ENABLE_MONITORING_CHECKS) {
+            if (env.ENABLE_MONITORING_CHECKS == 'true') {
               sh 'kubectl create namespace ${MONITORING_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
               sh "for file in ${MONITORING_DIR}/*.yaml; do sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' \"$file\" | kubectl apply -f -; done"
               sh 'kubectl get pods -n ${MONITORING_NAMESPACE}'
