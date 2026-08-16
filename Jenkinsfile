@@ -550,7 +550,7 @@ pipeline {
           echo "Admin image URI: ${adminImage} (source: ${env.ADMIN_IMAGE_URI?.trim() ? 'explicit' : 'computed'})"
           echo "Backend image URI: ${backendImage} (source: ${env.BACKEND_IMAGE_URI?.trim() ? 'explicit' : 'computed'})"
 
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}'
 
             sh 'kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
