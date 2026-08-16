@@ -422,6 +422,8 @@ pipeline {
                 set -e
                 export TF_PLUGIN_CACHE_DIR="$HOME/.terraform.d/plugin-cache"
                 export TF_INPUT=false
+                export TF_LOG_PATH="/tmp/terraform-debug.log"
+                export TF_LOG=warn
                 mkdir -p "$TF_PLUGIN_CACHE_DIR"
                 if ! aws s3api head-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION} 2>/dev/null; then
                   if [ "${AWS_REGION}" = "us-east-1" ]; then
@@ -439,32 +441,19 @@ pipeline {
                   -backend-config="bucket=${TF_STATE_BUCKET}" \
                   -backend-config="key=terraform/terraform.tfstate" \
                   -backend-config="region=${TF_STATE_BUCKET_REGION}" \
-                  -backend-config="use_lockfile=true" \
-                  -backend-config="dynamodb_table=${LOCK_TABLE}"
+                  -backend-config="use_lockfile=true"
 
                 terraform workspace select -or-create ${ENVIRONMENT:-dev} || terraform workspace select default
-                terraform validate
                 
-                # Retry terraform plan to handle plugin initialization timeouts
-                for attempt in 1 2 3; do
-                  echo "Terraform plan attempt $attempt/3..."
-                  if terraform plan \
-                    -var="aws_region=${AWS_REGION}" \
-                    -var="cluster_name=${EKS_CLUSTER_NAME}" \
-                    -var="ecr_repo_prefix=${ECR_REPO_PREFIX}" \
-                    -parallelism=2 \
-                    -out=tfplan; then
-                    echo "Terraform plan succeeded on attempt $attempt"
-                    break
-                  else
-                    if [ $attempt -eq 3 ]; then
-                      echo "Terraform plan failed after 3 attempts" >&2
-                      exit 1
-                    fi
-                    echo "Attempt $attempt failed, retrying in 30 seconds..."
-                    sleep 30
-                  fi
-                done
+                # Skip refresh during validate to avoid slow provider initialization
+                terraform validate -json >/dev/null 2>&1 || terraform validate
+                
+                terraform plan \
+                  -var="aws_region=${AWS_REGION}" \
+                  -var="cluster_name=${EKS_CLUSTER_NAME}" \
+                  -var="ecr_repo_prefix=${ECR_REPO_PREFIX}" \
+                  -parallelism=2 \
+                  -out=tfplan
                 
                 terraform apply -auto-approve -parallelism=2 tfplan
                 terraform output -json > ${TF_OUTPUT_FILE}
