@@ -246,14 +246,14 @@ pipeline {
             set -eu
             mkdir -p "${LOCAL_TOOLS_BIN}"
             missing=""
-            for cmd in kubectl helm aws; do
+            for cmd in kubectl helm aws terraform; do
               if ! command -v $cmd >/dev/null 2>&1; then
                 missing="$missing $cmd"
               fi
             done
 
             if [ -z "$missing" ]; then
-              echo "All required CLI tools present: kubectl helm aws"
+              echo "All required CLI tools present: kubectl helm aws terraform"
               exit 0
             fi
 
@@ -263,6 +263,7 @@ pipeline {
               echo "kubectl: https://kubernetes.io/docs/tasks/tools/"
               echo "helm: https://helm.sh/docs/intro/install/"
               echo "awscli: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+              echo "terraform: https://developer.hashicorp.com/terraform/downloads"
               exit 1
             fi
 
@@ -289,11 +290,18 @@ pipeline {
                   /tmp/aws/install --install-dir "${LOCAL_TOOLS_BIN}/aws-cli" --bin-dir "${LOCAL_TOOLS_BIN}" --update || true
                   rm -rf /tmp/aws /tmp/awscliv2.zip
                   ;;
+                terraform)
+                  TERRAFORM_VER="1.9.8"
+                  curl -L -s "https://releases.hashicorp.com/terraform/${TERRAFORM_VER}/terraform_${TERRAFORM_VER}_linux_amd64.zip" -o /tmp/terraform.zip || true
+                  unzip -o -q /tmp/terraform.zip -d "${LOCAL_TOOLS_BIN}" || true
+                  chmod +x "${LOCAL_TOOLS_BIN}/terraform" 2>/dev/null || true
+                  rm -f /tmp/terraform.zip
+                  ;;
               esac
             done
 
             still_missing=""
-            for cmd in kubectl helm aws; do
+            for cmd in kubectl helm aws terraform; do
               if ! command -v $cmd >/dev/null 2>&1; then
                 still_missing="$still_missing $cmd"
               fi
