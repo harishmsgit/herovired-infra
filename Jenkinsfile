@@ -539,9 +539,11 @@ pipeline {
                             --filters "Name=association.subnet-id,Values=${subnet_id}" \
                             --query 'RouteTables[0].RouteTableId' \
                             --output text)
-                          if [ "${current_route_table_id}" = "${route_table_id}" ]; then
-                            echo "Importing existing route-table association for ${subnet_id}."
-                            terraform import "${association_address}" "${subnet_id}/${route_table_id}"
+                          if [ "${current_route_table_id}" != "None" ] && [ -n "${current_route_table_id}" ]; then
+                            # Import the association currently attached to the subnet. Terraform
+                            # can then safely replace it with the desired public route table.
+                            echo "Importing current route-table association for ${subnet_id}."
+                            terraform import "${association_address}" "${subnet_id}/${current_route_table_id}"
                           fi
                         fi
                       fi
