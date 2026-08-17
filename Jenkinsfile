@@ -498,9 +498,34 @@ pipeline {
                   fi
                 fi
 
-                terraform workspace select -or-create ${ENVIRONMENT:-dev} || terraform workspace select default
-                
-                # Skip refresh during validate to avoid slow provider initialization
+                  terraform workspace select -or-create ${ENVIRONMENT:-dev} || terraform workspace select default
+
+                  # A previous partial apply created public subnet 10.20.1.0/24 in AWS,
+                  # but that resource is absent from the remote state. Re-adopt a subnet
+                  # only when its exact CIDR already exists in this Terraform-managed VPC.
+                  # This prevents CreateSubnet CIDR-conflict failures without adopting a
+                  # subnet from a different VPC.
+                  vpc_id=$(terraform state show aws_vpc.main 2>/dev/null | awk -F ' = ' '/^[[:space:]]*id = / { gsub(/"/, "", $2); print $2; exit }')
+                  if [ -n "${vpc_id}" ]; then
+                    subnet_index=0
+                    for subnet_cidr in 10.20.1.0/24 10.20.2.0/24; do
+                      subnet_address="aws_subnet.public[${subnet_index}]"
+                      if ! terraform state show "${subnet_address}" >/dev/null 2>&1; then
+                        existing_subnet_id=$(aws ec2 describe-subnets \
+                          --region "${AWS_REGION}" \
+                          --filters "Name=vpc-id,Values=${vpc_id}" "Name=cidr-block,Values=${subnet_cidr}" \
+                          --query 'Subnets[0].SubnetId' \
+                          --output text)
+                        if [ "${existing_subnet_id}" != "None" ] && [ -n "${existing_subnet_id}" ]; then
+                          echo "Importing existing subnet ${existing_subnet_id} (${subnet_cidr}) into Terraform state."
+                          terraform import "${subnet_address}" "${existing_subnet_id}"
+                        fi
+                      fi
+                      subnet_index=$((subnet_index + 1))
+                    done
+                  fi
+
+                  # Skip refresh during validate to avoid slow provider initialization
                 terraform validate -json >/dev/null 2>&1 || terraform validate
                 
                 terraform plan \
