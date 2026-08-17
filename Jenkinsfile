@@ -446,6 +446,11 @@ pipeline {
                 export TF_LOG_PATH="/tmp/terraform-debug.log"
                 export TF_LOG=warn
                 mkdir -p "$TF_PLUGIN_CACHE_DIR"
+                
+                # Clear stale Terraform cache to ensure fresh module loading
+                echo "Clearing stale Terraform cache..."
+                rm -rf .terraform .terraform.lock.hcl || true
+                
                 if ! aws s3api head-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION} 2>/dev/null; then
                   echo "Terraform S3 backend bucket ${TF_STATE_BUCKET} not found. Attempting creation."
                   if [ "${AWS_REGION}" = "us-east-1" ]; then
