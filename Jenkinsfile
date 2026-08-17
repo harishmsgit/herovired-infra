@@ -523,6 +523,39 @@ pipeline {
                       fi
                       subnet_index=$((subnet_index + 1))
                     done
+
+                    # Re-adopt the existing public-subnet route-table associations.
+                    # AWS identifies each association import by subnet ID and route-table ID.
+                    subnet_index=0
+                    for subnet_cidr in 10.20.1.0/24 10.20.2.0/24; do
+                      subnet_address="aws_subnet.public[${subnet_index}]"
+                      association_address="aws_route_table_association.public[${subnet_index}]"
+                      if ! terraform state show "${association_address}" >/dev/null 2>&1; then
+                        subnet_id=$(terraform state show "${subnet_address}" 2>/dev/null | grep -E '^[[:space:]]*id[[:space:]]*=' | head -n 1 | cut -d '"' -f 2)
+                        route_table_id=$(terraform state show aws_route_table.public 2>/dev/null | grep -E '^[[:space:]]*id[[:space:]]*=' | head -n 1 | cut -d '"' -f 2)
+                        if [ -n "${subnet_id}" ] && [ -n "${route_table_id}" ]; then
+                          current_route_table_id=$(aws ec2 describe-route-tables \
+                            --region "${AWS_REGION}" \
+                            --filters "Name=association.subnet-id,Values=${subnet_id}" \
+                            --query 'RouteTables[0].RouteTableId' \
+                            --output text)
+                          if [ "${current_route_table_id}" = "${route_table_id}" ]; then
+                            echo "Importing existing route-table association for ${subnet_id}."
+                            terraform import "${association_address}" "${subnet_id}/${route_table_id}"
+                          fi
+                        fi
+                      fi
+                      subnet_index=$((subnet_index + 1))
+                    done
+
+                    # The cluster was created in an earlier partial apply. Import it when
+                    # it exists but is absent from state, rather than issuing CreateCluster.
+                    if ! terraform state show aws_eks_cluster.main >/dev/null 2>&1; then
+                      if aws eks describe-cluster --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}" >/dev/null 2>&1; then
+                        echo "Importing existing EKS cluster ${EKS_CLUSTER_NAME} into Terraform state."
+                        terraform import aws_eks_cluster.main "${EKS_CLUSTER_NAME}"
+                      fi
+                    fi
                   fi
 
                   # Skip refresh during validate to avoid slow provider initialization
