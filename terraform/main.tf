@@ -298,19 +298,9 @@ resource "aws_instance" "management" {
   }
 }
 
-resource "aws_ecr_repository" "app" {
+# Use data source to reference existing ECR repositories instead of trying to create them.
+# The repositories are created externally or imported into Terraform state via 'terraform import'.
+data "aws_ecr_repository" "app" {
   for_each = toset(["frontend", "admin", "backend"])
-
-  name                 = "${var.ecr_repo_prefix}/${each.key}"
-  image_tag_mutability = "IMMUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  tags = {
-    Name        = "${local.name_prefix}-${each.key}-ecr"
-    Environment = local.env
-    Project     = "shopNow"
-  }
+  name     = "${var.ecr_repo_prefix}/${each.key}"
 }

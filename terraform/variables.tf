@@ -23,9 +23,9 @@ variable "public_subnet_cidrs" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type for the management instance"
+  description = "EC2 instance type for the management instance (use t2.micro for Free Tier)"
   type        = string
-  default     = "t3.medium"
+  default     = "t2.micro"
 }
 
 variable "allowed_ssh_cidr" {
@@ -59,9 +59,9 @@ variable "lock_table" {
 }
 
 variable "node_instance_types" {
-  description = "EKS node group instance types"
+  description = "EKS node group instance types (t3.small for better Free Tier compatibility)"
   type        = list(string)
-  default     = ["t3.medium"]
+  default     = ["t3.small"]
 }
 
 variable "node_desired_size" {

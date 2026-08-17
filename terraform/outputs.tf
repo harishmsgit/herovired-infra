@@ -35,10 +35,10 @@ output "management_ec2_private_ip" {
 
 output "ecr_repository_names" {
   description = "ECR repository names for app services"
-  value       = [for repo in aws_ecr_repository.app : repo.name]
+  value       = [for repo in data.aws_ecr_repository.app : repo.name]
 }
 
 output "ecr_repository_urls" {
   description = "ECR repository URLs for app services"
-  value       = [for repo in aws_ecr_repository.app : repo.repository_url]
+  value       = [for repo in data.aws_ecr_repository.app : repo.repository_url]
 }
