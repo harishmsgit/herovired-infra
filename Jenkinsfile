@@ -505,7 +505,7 @@ pipeline {
                   # only when its exact CIDR already exists in this Terraform-managed VPC.
                   # This prevents CreateSubnet CIDR-conflict failures without adopting a
                   # subnet from a different VPC.
-                  vpc_id=$(terraform state show aws_vpc.main 2>/dev/null | awk -F ' = ' '/^[[:space:]]*id = / { gsub(/"/, "", $2); print $2; exit }')
+                  vpc_id=$(terraform state show aws_vpc.main 2>/dev/null | grep -E '^[[:space:]]*id[[:space:]]*=' | head -n 1 | cut -d '"' -f 2)
                   if [ -n "${vpc_id}" ]; then
                     subnet_index=0
                     for subnet_cidr in 10.20.1.0/24 10.20.2.0/24; do
