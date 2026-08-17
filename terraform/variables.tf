@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region where resources will be provisioned"
   type        = string
-  default     = "us-east-1"
+  default     = "ap-south-1"
 }
 
 variable "environment" {
@@ -23,9 +23,9 @@ variable "public_subnet_cidrs" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type for the management instance (use t2.micro for Free Tier)"
+  description = "EC2 instance type for the management instance"
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "allowed_ssh_cidr" {
@@ -59,9 +59,9 @@ variable "lock_table" {
 }
 
 variable "node_instance_types" {
-  description = "EKS node group instance types (t3.small for better Free Tier compatibility)"
+  description = "EKS node group instance types"
   type        = list(string)
-  default     = ["t3.small"]
+  default     = ["t3.micro"]
 }
 
 variable "node_desired_size" {
@@ -79,7 +79,7 @@ variable "node_min_size" {
 variable "node_max_size" {
   description = "Maximum node count"
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "ecr_repo_prefix" {
