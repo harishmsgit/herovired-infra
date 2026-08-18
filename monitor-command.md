@@ -237,6 +237,45 @@ kubectl logs <pod-name> -n "$K8S_NAMESPACE" --all-containers --previous --tail=2
 
 ## 10. Failure-specific checks
 
+### Instant External Secrets diagnosis (actual values)
+
+Run this exact block from the Jenkins agent, management host, or a machine already authenticated to AWS. It uses the real project values and prints no secret value:
+
+~~~bash
+export KUBECONFIG="$(mktemp)"
+aws eks update-kubeconfig --region ap-south-1 --name shopnow-app-eks --kubeconfig "$KUBECONFIG"
+
+echo '=== Cluster and nodes ==='
+kubectl get nodes -o wide
+
+echo '=== External Secrets Helm release ==='
+helm status external-secrets -n shopnow-ns
+
+echo '=== External Secrets deployment and pods ==='
+kubectl get deployment,pods -n shopnow-ns -o wide
+kubectl describe deployment external-secrets -n shopnow-ns
+kubectl logs deployment/external-secrets -n shopnow-ns --all-containers --tail=200
+
+echo '=== Recent events (most important failure output) ==='
+kubectl get events -n shopnow-ns --sort-by='.lastTimestamp' | tail -n 100
+
+echo '=== IRSA service account and AWS role ==='
+kubectl get serviceaccount shopnow-external-secrets -n shopnow-ns \
+  -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}{"\n"}'
+aws iam get-role --role-name dev-shopnow-external-secrets-role \
+  --query 'Role.AssumeRolePolicyDocument' --output json
+aws iam get-role-policy --role-name dev-shopnow-external-secrets-role \
+  --policy-name dev-shopnow-external-secrets-read --output json
+
+echo '=== ExternalSecret status (does not show the MongoDB URI) ==='
+kubectl describe secretstore aws-secret-store -n shopnow-ns
+kubectl describe externalsecret mongo-secret -n shopnow-ns
+kubectl get secret mongo-secret -n shopnow-ns \
+  -o go-template='{{range $key, $value := .data}}{{println $key}}{{end}}' 2>/dev/null || true
+~~~
+
+Copy the output beginning with `=== External Secrets deployment and pods ===` and `=== Recent events` if a command fails.
+
 ### Jenkins checked out an older commit
 
 ~~~bash
