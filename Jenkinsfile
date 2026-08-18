@@ -804,12 +804,42 @@ pipeline {
 
   post {
     always {
-      echo 'Archiving available text logs and cleaning workspace.'
+      echo 'Archiving available text logs.'
       archiveArtifacts artifacts: '**/*.log, **/*.txt', allowEmptyArchive: true
-      cleanWs()
     }
     failure {
       echo 'Build failed. Review archived artifacts and console output.'
+      // Helm's atomic rollback reports only a timeout when a Kubernetes workload
+      // is not Ready. Capture the controller state and events while the failed
+      // release still exists, without printing any application secret values.
+      script {
+        ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
+          sh '''
+            set +e
+            export KUBECONFIG="$WORKSPACE/.kubeconfig-failure-diagnostics"
+            aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}" --kubeconfig "$KUBECONFIG"
+
+            echo '=== External Secrets Helm release ==='
+            helm status external-secrets -n "${K8S_NAMESPACE}" || true
+
+            echo '=== External Secrets deployments and pods ==='
+            kubectl get deployment,pods -n "${K8S_NAMESPACE}" -o wide || true
+            kubectl describe deployment external-secrets -n "${K8S_NAMESPACE}" || true
+            kubectl logs deployment/external-secrets -n "${K8S_NAMESPACE}" --all-containers --tail=200 || true
+
+            echo '=== Recent namespace events ==='
+            kubectl get events -n "${K8S_NAMESPACE}" --sort-by='.lastTimestamp' || true
+
+            echo '=== External Secrets API objects ==='
+            kubectl get crd secretstores.external-secrets.io externalsecrets.external-secrets.io || true
+            kubectl get validatingwebhookconfiguration secretstore-validate || true
+          '''
+        }
+      }
+    }
+    cleanup {
+      echo 'Cleaning workspace.'
+      cleanWs()
     }
   }
 }
