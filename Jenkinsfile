@@ -609,6 +609,15 @@ pipeline {
               aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}"
               kubectl create namespace "${K8S_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
               kubectl rollout status deployment/shopnow-external-secrets -n external-secrets --timeout=5m
+              # A previous release owns these cluster-scoped CRDs. This pipeline deliberately
+              # reuses them, but requires the stable v1 API used by the manifests below.
+              for crd in secretstores.external-secrets.io externalsecrets.external-secrets.io; do
+                kubectl get crd "$crd" >/dev/null
+                if ! kubectl get crd "$crd" -o jsonpath='{range .spec.versions[?(@.served==true)]}{.name}{"\\n"}{end}' | grep -qx 'v1'; then
+                  echo "Required served API version external-secrets.io/v1 is missing from $crd." >&2
+                  exit 1
+                fi
+              done
               sed -e "s|name: shopnow-ns|name: ${K8S_NAMESPACE}|g" "${K8S_MANIFESTS_DIR}/namespace/namespace.yaml" | kubectl apply -f -
               for file in "${K8S_MANIFESTS_DIR}/database/aws-secretstore.yaml" "${K8S_MANIFESTS_DIR}/database/mongo-secret-externalsecret.yaml"; do
                 sed -e "s|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g" "$file" | kubectl apply -f -
@@ -628,20 +637,23 @@ pipeline {
           ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh '''
               set -e
-              # wait for ExternalSecret to create the k8s secret (timeout 120s)
-              for i in $(seq 1 24); do
-                if kubectl get secret mongo-secret -n shopnow-ns >/dev/null 2>&1; then
-                  echo 'Found k8s secret mongo-secret'
-                  kubectl get secret mongo-secret -n shopnow-ns -o jsonpath='{.data.MONGODB_URI}' | base64 --decode >/tmp/mongo_uri || true
-                  if [ -s /tmp/mongo_uri ]; then
-                    echo 'mongo-secret contains MONGODB_URI'
-                    exit 0
-                  fi
-                fi
-                sleep 5
-              done
-              echo 'ExternalSecret did not sync within timeout' >&2
-              exit 1
+              # Wait for ESO's authoritative Ready condition before consuming its output.
+              # On failure, print controller and resource diagnostics for actionable logs.
+              if ! kubectl wait --for=condition=Ready externalsecret/mongo-secret -n "${K8S_NAMESPACE}" --timeout=120s; then
+                echo 'ExternalSecret did not become Ready within timeout.' >&2
+                kubectl describe externalsecret mongo-secret -n "${K8S_NAMESPACE}" || true
+                kubectl describe secretstore aws-secret-store -n "${K8S_NAMESPACE}" || true
+                kubectl logs deployment/shopnow-external-secrets -n external-secrets --tail=100 || true
+                exit 1
+              fi
+
+              kubectl get secret mongo-secret -n "${K8S_NAMESPACE}" >/dev/null
+              kubectl get secret mongo-secret -n "${K8S_NAMESPACE}" -o jsonpath='{.data.MONGODB_URI}' | base64 --decode >/tmp/mongo_uri
+              if [ ! -s /tmp/mongo_uri ]; then
+                echo 'mongo-secret is Ready but does not contain MONGODB_URI.' >&2
+                exit 1
+              fi
+              echo 'mongo-secret is Ready and contains MONGODB_URI.'
             '''
           }
         }

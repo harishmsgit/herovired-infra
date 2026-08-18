@@ -348,15 +348,33 @@ resource "helm_release" "external_secrets" {
   wait             = true
   timeout          = 600
   atomic           = true
+  # CRDs from the original `external-secrets` Helm release already exist in
+  # this cluster. They are cluster-scoped and cannot be re-owned by this
+  # release, so keep them in place and install only this controller release.
+  # Both Helm provider and chart-level CRD installation are disabled to avoid
+  # an unsafe ownership takeover during an in-place migration.
+  skip_crds = true
 
   set {
     name  = "installCRDs"
-    value = "true"
+    value = "false"
   }
 
   set {
     name  = "controllerClass"
     value = "shopnow"
+  }
+
+  # Reconcile only the application's namespaced resources. This avoids
+  # cluster-wide permissions for ClusterSecretStore/ClusterExternalSecret.
+  set {
+    name  = "scopedRBAC"
+    value = "true"
+  }
+
+  set {
+    name  = "scopedNamespace"
+    value = "shopnow-ns"
   }
 
   set {
