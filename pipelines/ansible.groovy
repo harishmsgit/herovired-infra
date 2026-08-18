@@ -25,7 +25,7 @@ pipeline {
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'shopnow-app-eks', description: 'EKS cluster name used when Terraform outputs are unavailable')
     string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'awsId', description: 'Jenkins AWS credentials ID')
     string(name: 'SSH_PRIVATE_KEY_CREDENTIALS_ID', defaultValue: 'management-ec2-ssh-key', description: 'Jenkins SSH private key credentials for the management EC2 instance')
-    string(name: 'REMOTE_USER', defaultValue: 'ubuntu', description: 'SSH user for the management EC2 instance')
+    string(name: 'REMOTE_USER', defaultValue: 'ec2-user', description: 'SSH user for the Amazon Linux management EC2 instance')
   }
 
   environment {
@@ -65,7 +65,7 @@ pipeline {
             env.TF_STATE_BUCKET_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET_REGION', 'ap-south-1')
             env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', 'shopnow-terraform-locks')
             env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', 'shopnow-app-eks')
-            env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', 'ubuntu')
+            env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', 'ec2-user')
             env.SSH_PRIVATE_KEY_CREDENTIALS_ID = infraSupport.resolveConfigValue(this, sharedConfig, 'SSH_PRIVATE_KEY_CREDENTIALS_ID', 'management-ec2-ssh-key')
           }
 

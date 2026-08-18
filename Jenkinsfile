@@ -96,7 +96,8 @@ pipeline {
     DEPLOY_ADMIN = 'true'
     DEPLOY_BACKEND = 'true'
     SSH_PRIVATE_KEY_CREDENTIALS_ID = 'management-ec2-ssh-key'
-    REMOTE_USER = 'ubuntu'
+    // The Terraform management AMI is Amazon Linux, whose default SSH user is ec2-user.
+    REMOTE_USER = 'ec2-user'
     RUN_TERRAFORM = 'true'
     RUN_ANSIBLE_AFTER_APPLY = 'true'
     RUN_DEPLOYMENT = 'true'
@@ -706,17 +707,23 @@ pipeline {
           ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}'
           }
-          sh '''
-            set -e
-            . "$WORKSPACE/${INFRA_ROOT}/scripts/ensure_ansible.sh"
-            export ANSIBLE_CONFIG="$WORKSPACE/${ANSIBLE_DIR}/ansible.cfg"
-            ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/configure-management.yml" \
-              -e "aws_region=${AWS_REGION}" \
-              -e "eks_cluster_name=${EKS_CLUSTER_NAME}" \
-              -e "remote_user=${REMOTE_USER}"
+          withCredentials([sshUserPrivateKey(
+            credentialsId: env.SSH_PRIVATE_KEY_CREDENTIALS_ID,
+            keyFileVariable: 'ANSIBLE_SSH_PRIVATE_KEY'
+          )]) {
+            sh '''
+              set -e
+              . "$WORKSPACE/${INFRA_ROOT}/scripts/ensure_ansible.sh"
+              export ANSIBLE_CONFIG="$WORKSPACE/${ANSIBLE_DIR}/ansible.cfg"
+              ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/configure-management.yml" \
+                --private-key "$ANSIBLE_SSH_PRIVATE_KEY" \
+                -e "aws_region=${AWS_REGION}" \
+                -e "eks_cluster_name=${EKS_CLUSTER_NAME}"
 
-            ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/validate-management.yml"
-          '''
+              ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/validate-management.yml" \
+                --private-key "$ANSIBLE_SSH_PRIVATE_KEY"
+            '''
+          }
         }
       }
     }

@@ -37,7 +37,7 @@ pipeline {
     booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Trigger the Ansible configuration job after Terraform apply succeeds')
     string(name: 'ANSIBLE_JOB_NAME', defaultValue: 'shopnow-ansible-config', description: 'Jenkins job name that uses the shared Ansible pipeline')
     string(name: 'SSH_PRIVATE_KEY_CREDENTIALS_ID', defaultValue: 'management-ec2-ssh-key', description: 'SSH private key credential passed to the Ansible job')
-    string(name: 'REMOTE_USER', defaultValue: 'ubuntu', description: 'SSH user passed to the Ansible job')
+    string(name: 'REMOTE_USER', defaultValue: 'ec2-user', description: 'SSH user passed to the Ansible job')
   }
 
   environment {
@@ -76,7 +76,7 @@ pipeline {
             env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', 'shopnow-terraform-locks')
             env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', 'shopnow-app-eks')
             env.ANSIBLE_JOB_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'ANSIBLE_JOB_NAME', 'shopnow-ansible-config')
-            env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', 'ubuntu')
+            env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', 'ec2-user')
             env.SSH_PRIVATE_KEY_CREDENTIALS_ID = infraSupport.resolveConfigValue(this, sharedConfig, 'SSH_PRIVATE_KEY_CREDENTIALS_ID', 'management-ec2-ssh-key')
           }
 
