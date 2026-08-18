@@ -271,6 +271,46 @@ resource "aws_eks_node_group" "main" {
   }
 }
 
+# Keep the existing node group online while this production-sized workload
+# group is created. This avoids the outage caused by replacing an EKS node
+# group solely to change its instance type.
+resource "aws_eks_node_group" "workloads" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = "${local.name_prefix}-workloads"
+  node_role_arn   = aws_iam_role.eks_node_group.arn
+  subnet_ids      = aws_subnet.public[*].id
+  instance_types  = var.workload_node_instance_types
+  capacity_type   = "ON_DEMAND"
+
+  scaling_config {
+    desired_size = var.workload_node_desired_size
+    min_size     = var.workload_node_min_size
+    max_size     = var.workload_node_max_size
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  labels = {
+    workload = "shopnow"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.node_policy,
+    aws_iam_role_policy_attachment.cni_policy,
+    aws_iam_role_policy_attachment.ecr_full_access_policy,
+    aws_iam_role_policy_attachment.ssm_policy,
+  ]
+
+  tags = {
+    Name        = "${local.name_prefix}-workloads"
+    Environment = local.env
+    NodePool    = "workloads"
+    Project     = "shopNow"
+  }
+}
+
 # External Secrets Operator reads application secrets using its own least-privilege
 # IAM role. IRSA keeps AWS credentials out of Kubernetes Secret objects.
 data "aws_caller_identity" "current" {}
@@ -382,7 +422,7 @@ resource "helm_release" "external_secrets" {
   }
 
   depends_on = [
-    aws_eks_node_group.main,
+    aws_eks_node_group.workloads,
     aws_iam_role_policy.external_secrets_secrets_read,
   ]
 }
@@ -406,6 +446,12 @@ resource "aws_instance" "management" {
     systemctl start docker
     usermod -aG docker ec2-user || true
   EOF
+
+  # User data is bootstrap-only. Do not restart or alter the management host
+  # during an unrelated infrastructure rollout because of historical drift.
+  lifecycle {
+    ignore_changes = [user_data]
+  }
 
   tags = {
     Name        = "${local.name_prefix}-management-instance"

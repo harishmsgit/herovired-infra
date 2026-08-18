@@ -14,3 +14,10 @@ node_instance_types = ["t3.micro"] # Verified Free Plan-eligible in ap-south-1
 node_min_size     = 2
 node_desired_size = 2
 node_max_size     = 2
+
+# Blue/green workload capacity. The existing node group remains online while
+# Terraform creates this production-sized group, avoiding a node-pool outage.
+workload_node_instance_types = ["t3.medium"]
+workload_node_min_size       = 2
+workload_node_desired_size   = 2
+workload_node_max_size       = 3
