@@ -449,9 +449,11 @@ pipeline {
                 export TF_LOG=warn
                 mkdir -p "$TF_PLUGIN_CACHE_DIR"
                 
-                # Clear stale Terraform cache to ensure fresh module loading
-                echo "Clearing stale Terraform cache..."
-                rm -rf .terraform .terraform.lock.hcl || true
+                # The working directory is ephemeral, but the committed lock file pins
+                # verified provider checksums. Preserve it so the shared plugin cache can
+                # reuse providers rather than downloading and resolving them every build.
+                echo "Preparing Terraform working directory..."
+                rm -rf .terraform || true
                 
                 if ! aws s3api head-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION} 2>/dev/null; then
                   echo "Terraform S3 backend bucket ${TF_STATE_BUCKET} not found. Attempting creation."

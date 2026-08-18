@@ -16,8 +16,8 @@ node_desired_size = 2
 node_max_size     = 2
 
 # Blue/green workload capacity. The existing node group remains online while
-# Terraform creates this production-sized group, avoiding a node-pool outage.
-workload_node_instance_types = ["t3.medium"]
+# Terraform creates this Free Tier-eligible x86 group, avoiding a node-pool outage.
+workload_node_instance_types = ["t3.small"]
 workload_node_min_size       = 2
 workload_node_desired_size   = 2
 workload_node_max_size       = 3
