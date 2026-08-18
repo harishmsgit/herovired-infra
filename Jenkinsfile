@@ -119,6 +119,8 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
+        // The SCM job configuration selects the branch/revision before this pipeline starts.
+        // Keep it set to feature/infra-capstone-project-v1 so webhook builds use its latest commit.
         checkout scm
       }
     }
@@ -602,6 +604,8 @@ pipeline {
           ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh '''
               set -e
+              # Terraform installs the External Secrets controller with IRSA. Apply these
+              # resources before verification so it can fetch shopnow/mongo from AWS.
               aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}"
               kubectl create namespace "${K8S_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
               kubectl rollout status deployment/shopnow-external-secrets -n external-secrets --timeout=5m
