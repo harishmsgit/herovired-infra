@@ -310,7 +310,7 @@ data "aws_iam_policy_document" "external_secrets_assume" {
     condition {
       test     = "StringEquals"
       variable = "${replace(aws_eks_cluster.main.identity[0].oidc[0].issuer, "https://", "")}:sub"
-      values   = ["system:serviceaccount:external-secrets:shopnow-external-secrets"]
+      values   = ["system:serviceaccount:shopnow-ns:shopnow-external-secrets"]
     }
   }
 }
@@ -340,25 +340,18 @@ resource "aws_iam_role_policy" "external_secrets_secrets_read" {
 }
 
 resource "helm_release" "external_secrets" {
-  name             = "shopnow-external-secrets"
+  # This release was created before Terraform managed it. Keep its existing
+  # name and namespace so Helm retains ownership of its CRDs and admission
+  # webhooks during the in-place upgrade.
+  name             = "external-secrets"
   repository       = "https://charts.external-secrets.io"
   chart            = "external-secrets"
-  namespace        = "external-secrets"
+  version          = "2.9.0"
+  namespace        = "shopnow-ns"
   create_namespace = true
   wait             = true
   timeout          = 600
   atomic           = true
-  # CRDs from the original `external-secrets` Helm release already exist in
-  # this cluster. They are cluster-scoped and cannot be re-owned by this
-  # release, so keep them in place and install only this controller release.
-  # Both Helm provider and chart-level CRD installation are disabled to avoid
-  # an unsafe ownership takeover during an in-place migration.
-  skip_crds = true
-
-  set {
-    name  = "installCRDs"
-    value = "false"
-  }
 
   set {
     name  = "controllerClass"

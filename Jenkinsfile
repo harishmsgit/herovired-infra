@@ -560,6 +560,25 @@ pipeline {
                         terraform import aws_eks_cluster.main "${EKS_CLUSTER_NAME}"
                       fi
                     fi
+
+                    # External Secrets was originally installed outside Terraform. Import the
+                    # owning Helm release by its existing namespace/name before plan so Terraform
+                    # upgrades it in place rather than creating a conflicting second release.
+                    if ! terraform state show helm_release.external_secrets >/dev/null 2>&1; then
+                      export KUBECONFIG="$WORKSPACE/.kubeconfig-terraform"
+                      aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}" --kubeconfig "$KUBECONFIG"
+                      release_status_log=/tmp/external-secrets-release-status.log
+                      if helm status external-secrets --namespace "${K8S_NAMESPACE}" >"$release_status_log" 2>&1; then
+                        echo "Importing existing Helm release external-secrets in ${K8S_NAMESPACE}."
+                        terraform import helm_release.external_secrets "${K8S_NAMESPACE}/external-secrets"
+                      elif grep -qi 'release: not found' "$release_status_log"; then
+                        echo "External Secrets Helm release is not present; Terraform will install it."
+                      else
+                        echo "Unable to determine the External Secrets Helm release state:" >&2
+                        cat "$release_status_log" >&2
+                        exit 1
+                      fi
+                    fi
                   fi
 
                   # Skip refresh during validate to avoid slow provider initialization
@@ -608,9 +627,9 @@ pipeline {
               # resources before verification so it can fetch shopnow/mongo from AWS.
               aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}"
               kubectl create namespace "${K8S_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-              kubectl rollout status deployment/shopnow-external-secrets -n external-secrets --timeout=5m
-              # A previous release owns these cluster-scoped CRDs. This pipeline deliberately
-              # reuses them, but requires the stable v1 API used by the manifests below.
+              kubectl rollout status deployment/external-secrets -n "${K8S_NAMESPACE}" --timeout=5m
+              # The in-place Helm upgrade retains ownership of the existing cluster CRDs.
+              # Require the stable v1 API used by the manifests below.
               for crd in secretstores.external-secrets.io externalsecrets.external-secrets.io; do
                 kubectl get crd "$crd" >/dev/null
                 if ! kubectl get crd "$crd" -o jsonpath='{range .spec.versions[?(@.served==true)]}{.name}{"\\n"}{end}' | grep -qx 'v1'; then
@@ -643,7 +662,7 @@ pipeline {
                 echo 'ExternalSecret did not become Ready within timeout.' >&2
                 kubectl describe externalsecret mongo-secret -n "${K8S_NAMESPACE}" || true
                 kubectl describe secretstore aws-secret-store -n "${K8S_NAMESPACE}" || true
-                kubectl logs deployment/shopnow-external-secrets -n external-secrets --tail=100 || true
+                kubectl logs deployment/external-secrets -n "${K8S_NAMESPACE}" --tail=100 || true
                 exit 1
               fi
 
