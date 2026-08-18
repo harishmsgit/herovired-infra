@@ -593,6 +593,28 @@ pipeline {
       }
     }
 
+    stage('Apply External Secrets Resources') {
+      when {
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
+      }
+      steps {
+        script {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
+            sh '''
+              set -e
+              aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}"
+              kubectl create namespace "${K8S_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+              kubectl rollout status deployment/shopnow-external-secrets -n external-secrets --timeout=5m
+              sed -e "s|name: shopnow-ns|name: ${K8S_NAMESPACE}|g" "${K8S_MANIFESTS_DIR}/namespace/namespace.yaml" | kubectl apply -f -
+              for file in "${K8S_MANIFESTS_DIR}/database/aws-secretstore.yaml" "${K8S_MANIFESTS_DIR}/database/mongo-secret-externalsecret.yaml"; do
+                sed -e "s|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g" "$file" | kubectl apply -f -
+              done
+            '''
+          }
+        }
+      }
+    }
+
     stage('Verify ExternalSecret Sync') {
       when {
         expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }

@@ -48,7 +48,7 @@ resource "aws_subnet" "public" {
   tags = {
     Name                                        = "${local.name_prefix}-public-${count.index + 1}"
     Environment                                 = local.env
-    "kubernetes.io/role/elb"                   = "1"
+    "kubernetes.io/role/elb"                    = "1"
     "kubernetes.io/cluster/${var.cluster_name}" = "shared"
   }
 }
@@ -269,6 +269,111 @@ resource "aws_eks_node_group" "main" {
     Name        = "${local.name_prefix}-nodes"
     Environment = local.env
   }
+}
+
+# External Secrets Operator reads application secrets using its own least-privilege
+# IAM role. IRSA keeps AWS credentials out of Kubernetes Secret objects.
+data "aws_caller_identity" "current" {}
+
+data "tls_certificate" "eks_oidc" {
+  url = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "eks" {
+  url             = aws_eks_cluster.main.identity[0].oidc[0].issuer
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint]
+
+  tags = {
+    Name        = "${local.name_prefix}-eks-oidc"
+    Environment = local.env
+    Project     = "shopNow"
+  }
+}
+
+data "aws_iam_policy_document" "external_secrets_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.eks.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_eks_cluster.main.identity[0].oidc[0].issuer, "https://", "")}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_eks_cluster.main.identity[0].oidc[0].issuer, "https://", "")}:sub"
+      values   = ["system:serviceaccount:external-secrets:shopnow-external-secrets"]
+    }
+  }
+}
+
+resource "aws_iam_role" "external_secrets" {
+  name               = "${local.name_prefix}-external-secrets-role"
+  assume_role_policy = data.aws_iam_policy_document.external_secrets_assume.json
+}
+
+resource "aws_iam_role_policy" "external_secrets_secrets_read" {
+  name = "${local.name_prefix}-external-secrets-read"
+  role = aws_iam_role.external_secrets.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+        ]
+        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:shopnow/*"
+      },
+    ]
+  })
+}
+
+resource "helm_release" "external_secrets" {
+  name             = "shopnow-external-secrets"
+  repository       = "https://charts.external-secrets.io"
+  chart            = "external-secrets"
+  namespace        = "external-secrets"
+  create_namespace = true
+  wait             = true
+  timeout          = 600
+  atomic           = true
+
+  set {
+    name  = "installCRDs"
+    value = "true"
+  }
+
+  set {
+    name  = "controllerClass"
+    value = "shopnow"
+  }
+
+  set {
+    name  = "serviceAccount.name"
+    value = "shopnow-external-secrets"
+  }
+
+  set {
+    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+    value = aws_iam_role.external_secrets.arn
+    type  = "string"
+  }
+
+  depends_on = [
+    aws_eks_node_group.main,
+    aws_iam_role_policy.external_secrets_secrets_read,
+  ]
 }
 
 resource "aws_instance" "management" {
