@@ -249,6 +249,20 @@ The expected public URLs are `http://<ingress-address>/harish/`,
 `http://<ingress-address>/harish-api/health`. Use the printed values rather than
 guessing the AWS load-balancer address.
 
+### Current deployment URLs (19 August 2026)
+
+The current public load balancer is
+`a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com`:
+
+~~~text
+http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/harish/
+http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/harish-admin/
+http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/harish-api/health
+~~~
+
+AWS can assign a new address if this load balancer is replaced, so use the
+dynamic command block above as the source of truth after any infrastructure change.
+
 Investigate an unhealthy workload without exposing secrets:
 
 ~~~bash

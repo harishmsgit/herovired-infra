@@ -499,7 +499,16 @@ pipeline {
                 export TF_INPUT=false
                 export TF_LOG_PATH="/tmp/terraform-debug.log"
                 export TF_LOG=warn
+                # Give Helm an isolated, build-local repository cache. This prevents a
+                # stale global repository entry from breaking Terraform's Helm provider
+                # on a freshly recreated Jenkins agent.
+                export HELM_REPOSITORY_CONFIG="$WORKSPACE/.helm/repositories.yaml"
+                export HELM_REPOSITORY_CACHE="$WORKSPACE/.helm/repository"
                 mkdir -p "$TF_PLUGIN_CACHE_DIR"
+                mkdir -p "$HELM_REPOSITORY_CACHE"
+                helm repo add external-secrets https://charts.external-secrets.io --force-update
+                helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update
+                helm repo update
                 
                 # The working directory is ephemeral, but the committed lock file pins
                 # verified provider checksums. Preserve it so the shared plugin cache can

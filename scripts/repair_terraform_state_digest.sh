@@ -6,6 +6,7 @@ TABLE="${LOCK_TABLE:-shopnow-terraform-locks}"
 STATE_KEY="${STATE_KEY:-env:/dev/terraform/terraform.tfstate}"
 AWS_REGION="${AWS_REGION:-ap-south-1}"
 FORCE="${FORCE:-false}"
+STATE_DIGEST_KEY="${STATE_KEY}-md5"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,15 +57,17 @@ if ! aws dynamodb describe-table --table-name "$TABLE" --region "$AWS_REGION" >/
 fi
 
 if [[ "$FORCE" != "true" ]]; then
-  echo "This will remove the stale Terraform state digest from DynamoDB for key: $STATE_KEY"
+  echo "This will remove the stale Terraform state digest from DynamoDB for key: $STATE_DIGEST_KEY"
   echo "Review the state before continuing. Re-run with --force to apply the fix."
   exit 0
 fi
 
+# The S3 backend stores the state checksum under <state-key>-md5. Do not
+# delete STATE_KEY itself: that key is used for an active Terraform lock.
 aws dynamodb delete-item \
   --table-name "$TABLE" \
   --region "$AWS_REGION" \
-  --key "{\"LockID\":{\"S\":\"$STATE_KEY\"}}" >/dev/null
+  --key "{\"LockID\":{\"S\":\"$STATE_DIGEST_KEY\"}}" >/dev/null
 
-echo "Removed stale Terraform state digest for $STATE_KEY from $TABLE."
+echo "Removed stale Terraform state digest for $STATE_DIGEST_KEY from $TABLE."
 echo "Run terraform init and then terraform plan/apply again."

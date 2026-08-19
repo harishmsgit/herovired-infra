@@ -218,9 +218,22 @@ resource "aws_iam_role_policy_attachment" "management_ecr_full_access" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
 }
 
-resource "aws_iam_role_policy_attachment" "management_eks_access" {
-  role       = aws_iam_role.management.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+// The EKS cluster service policy is not an administrator policy. The management
+// host needs only cluster discovery to generate its kubeconfig and obtain a token.
+resource "aws_iam_role_policy" "management_eks_discovery" {
+  name = "${local.name_prefix}-management-eks-discovery"
+  role = aws_iam_role.management.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["eks:DescribeCluster"]
+        Resource = aws_eks_cluster.main.arn
+      },
+    ]
+  })
 }
 
 resource "aws_eks_cluster" "main" {
@@ -425,6 +438,132 @@ resource "helm_release" "external_secrets" {
     aws_eks_node_group.workloads,
     aws_iam_role_policy.external_secrets_secrets_read,
   ]
+}
+
+// Public entry point for the ShopNow Ingress objects. The pinned chart creates
+// the nginx IngressClass and an AWS LoadBalancer service.
+resource "helm_release" "ingress_nginx" {
+  name             = "ingress-nginx"
+  repository       = "https://kubernetes.github.io/ingress-nginx"
+  chart            = "ingress-nginx"
+  version          = "4.15.1"
+  namespace        = "ingress-nginx"
+  create_namespace = true
+  wait             = true
+  timeout          = 900
+  atomic           = true
+
+  set {
+    name  = "controller.service.type"
+    value = "LoadBalancer"
+  }
+
+  set {
+    name  = "controller.ingressClassResource.name"
+    value = "nginx"
+  }
+
+  set {
+    name  = "controller.replicaCount"
+    value = "1"
+  }
+
+  depends_on = [
+    aws_eks_node_group.workloads,
+  ]
+}
+
+// EKS is currently using the legacy aws-auth ConfigMap. Keep the existing node
+// mapping and add a dedicated group for the management EC2 role; no cluster-admin
+// access is granted.
+resource "kubernetes_config_map_v1_data" "aws_auth" {
+  metadata {
+    name      = "aws-auth"
+    namespace = "kube-system"
+  }
+
+  data = {
+    mapRoles = yamlencode([
+      {
+        rolearn  = aws_iam_role.eks_node_group.arn
+        username = "system:node:{{EC2PrivateDNSName}}"
+        groups   = ["system:bootstrappers", "system:nodes"]
+      },
+      {
+        rolearn  = aws_iam_role.management.arn
+        username = "shopnow-management:{{SessionName}}"
+        groups   = ["shopnow-management"]
+      },
+    ])
+  }
+
+  field_manager = "terraform-shopnow-access"
+  force         = true
+
+  depends_on = [
+    aws_eks_node_group.workloads,
+    aws_iam_role_policy.management_eks_discovery,
+  ]
+}
+
+// Management access is limited to observing ShopNow and creating a local
+// port-forward. It cannot change workloads, secrets, or cluster-wide resources.
+resource "kubernetes_role_v1" "management_portforward" {
+  metadata {
+    name      = "shopnow-management-portforward"
+    namespace = "shopnow-ns"
+  }
+
+  rule {
+    api_groups = [""]
+    resources  = ["pods", "pods/log", "services", "endpoints"]
+    verbs      = ["get", "list", "watch"]
+  }
+
+  rule {
+    api_groups = [""]
+    resources  = ["pods/portforward"]
+    verbs      = ["create"]
+  }
+
+  rule {
+    api_groups = ["apps"]
+    resources  = ["deployments", "replicasets"]
+    verbs      = ["get", "list", "watch"]
+  }
+
+  rule {
+    api_groups = ["discovery.k8s.io"]
+    resources  = ["endpointslices"]
+    verbs      = ["get", "list", "watch"]
+  }
+
+  rule {
+    api_groups = ["networking.k8s.io"]
+    resources  = ["ingresses"]
+    verbs      = ["get", "list", "watch"]
+  }
+
+  depends_on = [kubernetes_config_map_v1_data.aws_auth]
+}
+
+resource "kubernetes_role_binding_v1" "management_portforward" {
+  metadata {
+    name      = "shopnow-management-portforward"
+    namespace = "shopnow-ns"
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = kubernetes_role_v1.management_portforward.metadata[0].name
+  }
+
+  subject {
+    kind      = "Group"
+    name      = "shopnow-management"
+    api_group = "rbac.authorization.k8s.io"
+  }
 }
 
 resource "aws_instance" "management" {
