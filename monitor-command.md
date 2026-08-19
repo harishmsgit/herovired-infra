@@ -220,11 +220,34 @@ kubectl rollout status deployment/admin -n "$K8S_NAMESPACE" --timeout=5m
 kubectl rollout status deployment/backend -n "$K8S_NAMESPACE" --timeout=5m
 kubectl get events -n "$K8S_NAMESPACE" --sort-by='.lastTimestamp' | tail -n 100
 
+# Public application access: resolve the actual NGINX/EKS load-balancer address.
+export APP_USER=harish
+export INGRESS_HOST="$(kubectl get ingress shopnow-ingress -n "$K8S_NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
+if [ -z "$INGRESS_HOST" ]; then
+  export INGRESS_HOST="$(kubectl get ingress shopnow-ingress -n "$K8S_NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+fi
+test -n "$INGRESS_HOST" || { echo 'Ingress has no public address yet; run: kubectl get ingress -n shopnow-ns -w'; exit 1; }
+
+export SHOPNOW_FRONTEND_URL="http://${INGRESS_HOST}/${APP_USER}/"
+export SHOPNOW_ADMIN_URL="http://${INGRESS_HOST}/${APP_USER}-admin/"
+export SHOPNOW_API_HEALTH_URL="http://${INGRESS_HOST}/${APP_USER}-api/health"
+printf 'Frontend: %s\nAdmin:    %s\nAPI:      %s\n' "$SHOPNOW_FRONTEND_URL" "$SHOPNOW_ADMIN_URL" "$SHOPNOW_API_HEALTH_URL"
+
+# HTTP 200/3xx verifies the React apps; the API must return JSON with status OK.
+curl -fsSIL "$SHOPNOW_FRONTEND_URL"
+curl -fsSIL "$SHOPNOW_ADMIN_URL"
+curl -fsS "$SHOPNOW_API_HEALTH_URL"; echo
+
 export MONITORING_NAMESPACE=monitor-ns
 kubectl get pods,services -n "$MONITORING_NAMESPACE" -o wide
-kubectl get servicemonitor,prometheusrule -n "$MONITORING_NAMESPACE"
+kubectl get servicemonitor,prometheusrule -n "$MONITORING_NAMESPACE" || true
 kubectl get events -n "$MONITORING_NAMESPACE" --sort-by='.lastTimestamp' | tail -n 50
 ~~~
+
+The expected public URLs are `http://<ingress-address>/harish/`,
+`http://<ingress-address>/harish-admin/`, and
+`http://<ingress-address>/harish-api/health`. Use the printed values rather than
+guessing the AWS load-balancer address.
 
 Investigate an unhealthy workload without exposing secrets:
 
