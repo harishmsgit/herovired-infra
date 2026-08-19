@@ -2,21 +2,25 @@
 
 set -euo pipefail
 
-if command -v ansible >/dev/null 2>&1; then
-  exit 0
-fi
-
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required to bootstrap ansible" >&2
   exit 1
 fi
 
-python3 -m pip install --user --upgrade pip >/dev/null 2>&1 || true
-python3 -m pip install --user ansible-core >/dev/null
+# Debian's system Python is externally managed (PEP 668), so installing with
+# pip --user is not reliable. Keep Ansible in a persistent virtual environment
+# instead; it avoids changing the system Python and is reused by later builds.
+ANSIBLE_VENV_DIR="${ANSIBLE_VENV_DIR:-$HOME/.cache/herovired-ansible}"
 
-export PATH="$HOME/.local/bin:$PATH"
+if [ ! -x "$ANSIBLE_VENV_DIR/bin/ansible" ]; then
+  mkdir -p "$(dirname "$ANSIBLE_VENV_DIR")"
+  python3 -m venv "$ANSIBLE_VENV_DIR"
+  "$ANSIBLE_VENV_DIR/bin/python" -m pip install --upgrade pip ansible-core >/dev/null
+fi
+
+export PATH="$ANSIBLE_VENV_DIR/bin:$PATH"
 
 if ! command -v ansible >/dev/null 2>&1; then
-  echo "ansible installation did not produce an ansible executable in PATH" >&2
+  echo "Ansible virtual environment did not produce an ansible executable in PATH" >&2
   exit 1
 fi

@@ -16,7 +16,19 @@
       update_cache: true
     when: ansible_os_family == 'Debian'
 
-  - name: Install base packages on RedHat-family systems
+  # Amazon Linux 2023 ships curl-minimal. Installing the full curl package
+  # conflicts with it, even though curl-minimal provides the curl command.
+  - name: Install base packages on Amazon Linux
+    ansible.builtin.dnf:
+      name:
+      - docker
+      - curl-minimal
+      - unzip
+      - python3-pip
+      state: present
+    when: ansible_distribution == 'Amazon'
+
+  - name: Install base packages on other RedHat-family systems
     ansible.builtin.package:
       name:
       - docker
@@ -24,7 +36,7 @@
       - unzip
       - python3-pip
       state: present
-    when: ansible_os_family in ['RedHat', 'Amazon']
+    when: ansible_os_family == 'RedHat' and ansible_distribution != 'Amazon'
 
   - name: Enable and start Docker
     ansible.builtin.service:

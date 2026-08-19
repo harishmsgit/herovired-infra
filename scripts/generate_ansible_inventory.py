@@ -47,7 +47,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generate Ansible inventory from Terraform output JSON.")
     parser.add_argument("--terraform-output", required=True, help="Path to terraform output JSON file")
     parser.add_argument("--inventory", help="Inventory path to write")
-    parser.add_argument("--remote-user", default="ubuntu", help="SSH user for the management host")
+    parser.add_argument("--remote-user", default="ec2-user", help="SSH user for the Amazon Linux management host")
     parser.add_argument("--public-ip", help="Override public IP instead of reading terraform output")
     parser.add_argument("--print-field", choices=sorted(FIELD_CANDIDATES.keys()), help="Print a single field and exit")
     args = parser.parse_args()

@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region where resources will be provisioned"
   type        = string
-  default     = "us-east-1"
+  default     = "ap-south-1"
 }
 
 variable "environment" {
@@ -25,7 +25,7 @@ variable "public_subnet_cidrs" {
 variable "instance_type" {
   description = "EC2 instance type for the management instance"
   type        = string
-  default     = "t3.medium"
+  default     = "t3.micro"
 }
 
 variable "allowed_ssh_cidr" {
@@ -37,7 +37,7 @@ variable "allowed_ssh_cidr" {
 variable "cluster_name" {
   description = "Name of the EKS cluster"
   type        = string
-  default     = "shopnow-eks"
+  default     = "shopnow-app-eks"
 }
 
 variable "management_key_name" {
@@ -49,7 +49,7 @@ variable "management_key_name" {
 variable "state_bucket" {
   description = "S3 bucket name used to store Terraform state"
   type        = string
-  default     = "harish-terraform-state-bucket"
+  default     = "harish-pc-s3-bucket"
 }
 
 variable "lock_table" {
@@ -61,13 +61,19 @@ variable "lock_table" {
 variable "node_instance_types" {
   description = "EKS node group instance types"
   type        = list(string)
-  default     = ["t3.medium"]
+  default     = ["t3.micro"]
+}
+
+variable "workload_node_instance_types" {
+  description = "Instance types for the blue/green EKS workload node group"
+  type        = list(string)
+  default     = ["t3.small"]
 }
 
 variable "node_desired_size" {
   description = "Desired node count"
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "node_min_size" {
@@ -78,6 +84,24 @@ variable "node_min_size" {
 
 variable "node_max_size" {
   description = "Maximum node count"
+  type        = number
+  default     = 1
+}
+
+variable "workload_node_desired_size" {
+  description = "Desired node count for the blue/green EKS workload node group"
+  type        = number
+  default     = 2
+}
+
+variable "workload_node_min_size" {
+  description = "Minimum node count for the blue/green EKS workload node group"
+  type        = number
+  default     = 2
+}
+
+variable "workload_node_max_size" {
+  description = "Maximum node count for the blue/green EKS workload node group"
   type        = number
   default     = 3
 }

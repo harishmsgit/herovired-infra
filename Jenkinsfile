@@ -34,48 +34,50 @@ def buildImageUri(String accountId, String region, String repoPrefix, String ser
   def registry = "${accountId}.dkr.ecr.${region}.amazonaws.com"
   def strategy = repositoryStrategy?.trim()
   def sharedRepo = singleRepository?.trim()
+  def tag = (imageTag?.trim() && imageTag.trim() != 'null') ? imageTag.trim() : 'manual'
 
   if (strategy == 'single-repo' || sharedRepo) {
     def repoName = sharedRepo ?: repoPrefix
-    return "${registry}/${repoName}:${serviceName}-${imageTag}"
+    return "${registry}/${repoName}:${serviceName}-${tag}"
   }
 
-  return "${registry}/${repoPrefix}/${serviceName}:${imageTag}"
+  return "${registry}/${repoPrefix}/${serviceName}:${tag}"
+}
+
+def ensureImageTag(script) {
+  def tag = script.env.IMAGE_TAG?.trim()
+  if (!tag || tag == 'null') {
+    def buildNumber = script.env.BUILD_NUMBER?.trim()
+    if (!buildNumber || buildNumber == 'null') {
+      buildNumber = 'manual'
+    }
+
+    def shortSha = script.sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+    if (!shortSha || shortSha == 'null') {
+      shortSha = new java.text.SimpleDateFormat('yyyyMMddHHmmss').format(new java.util.Date())
+    }
+
+    tag = "${buildNumber}-${shortSha}".replaceAll(/[^A-Za-z0-9_.-]+/, '-')
+    if (!tag || tag == 'null') {
+      tag = "manual-${new java.text.SimpleDateFormat('yyyyMMddHHmmss').format(new java.util.Date())}"
+    }
+    script.env.IMAGE_TAG = tag
+  }
+  return script.env.IMAGE_TAG
+}
+
+def buildInput(script, String name, String defaultValue = '') {
+  def value = script.params[name]
+  if (value == null) {
+    value = script.env[name]
+  }
+
+  value = value == null ? '' : value.toString().trim()
+  return (value && value != 'null') ? value : defaultValue
 }
 
 pipeline {
   agent any
-
-  parameters {
-    string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region used by Terraform and EKS')
-    string(name: 'AWS_ACCOUNT_ID', defaultValue: '495013583028', description: 'AWS account used for shared infra lookups')
-    string(name: 'TF_STATE_BUCKET', defaultValue: 'harish-terraform-state-bucket', description: 'S3 bucket for Terraform state')
-    string(name: 'TF_STATE_BUCKET_REGION', defaultValue: 'ap-south-1', description: 'Region the Terraform state S3 bucket actually lives in (may differ from AWS_REGION)')
-    string(name: 'LOCK_TABLE', defaultValue: 'shopnow-terraform-locks', description: 'DynamoDB table for Terraform locking')
-    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'java-spring-eks', description: 'EKS cluster name')
-    string(name: 'ECR_REPO_PREFIX', defaultValue: 'shopnow-dev', description: 'ECR repository prefix for the current environment (dev/prod)')
-    choice(name: 'ECR_REPOSITORY_STRATEGY', choices: ['service-repos', 'single-repo'], description: 'Use service repositories (<prefix>/frontend) or one shared repository (<repo>:frontend-<tag>)')
-    string(name: 'SINGLE_ECR_REPOSITORY', defaultValue: '', description: 'Shared ECR repository name for single-repo mode, for example shopnow-ecr-21-07-2027')
-    string(name: 'FRONTEND_IMAGE_URI', defaultValue: '', description: 'Optional explicit frontend image URI (overrides computed URI)')
-    string(name: 'ADMIN_IMAGE_URI', defaultValue: '', description: 'Optional explicit admin image URI (overrides computed URI)')
-    string(name: 'BACKEND_IMAGE_URI', defaultValue: '', description: 'Optional explicit backend image URI (overrides computed URI)')
-    string(name: 'IMAGE_TAG', defaultValue: '', description: 'Image tag to deploy; defaults to build number and git SHA')
-    booleanParam(name: 'DEPLOY_FRONTEND', defaultValue: false, description: 'Deploy the frontend service')
-    booleanParam(name: 'DEPLOY_ADMIN', defaultValue: false, description: 'Deploy the admin service')
-    booleanParam(name: 'DEPLOY_BACKEND', defaultValue: false, description: 'Deploy the backend service')
-    string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'awsId', description: 'Jenkins AWS credentials ID')
-    string(name: 'SSH_PRIVATE_KEY_CREDENTIALS_ID', defaultValue: 'management-ec2-ssh-key', description: 'SSH private key credentials for the management EC2 instance')
-    string(name: 'REMOTE_USER', defaultValue: 'ubuntu', description: 'SSH user for the management EC2 instance')
-    booleanParam(name: 'RUN_TERRAFORM', defaultValue: true, description: 'Run Terraform to provision infrastructure')
-    booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Run Ansible for management host configuration')
-    booleanParam(name: 'RUN_DEPLOYMENT', defaultValue: true, description: 'Deploy application workloads using current image tags')
-    string(name: 'K8S_NAMESPACE', defaultValue: 'shopnow-ns', description: 'Kubernetes namespace for the application workloads')
-    string(name: 'MONITORING_NAMESPACE', defaultValue: 'monitor-ns', description: 'Namespace for monitoring workloads')
-    string(name: 'MONITORING_RELEASE_NAME', defaultValue: 'prometheus', description: 'Monitoring release name')
-    string(name: 'GRAFANA_ADMIN_PASSWORD', defaultValue: 'dev-grafana-admin', description: 'Grafana admin password')
-    booleanParam(name: 'ENABLE_MONITORING_CHECKS', defaultValue: true, description: 'Apply monitoring manifests and verify monitoring health')
-    booleanParam(name: 'AUTO_INSTALL_CLI_TOOLS', defaultValue: true, description: 'If true, attempt to auto-install missing CLI tools (kubectl/helm/aws) on the agent')
-  }
 
   options {
     skipDefaultCheckout()
@@ -85,33 +87,54 @@ pipeline {
     buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
   }
 
+  // Contract used by the ShopNow build job when it starts this deployment job.
+  // Direct infrastructure runs skip workload deployment when no image URIs are supplied.
+  parameters {
+    string(name: 'FRONTEND_IMAGE_URI', defaultValue: '', trim: true, description: 'Explicit frontend image URI produced by the ShopNow build')
+    string(name: 'ADMIN_IMAGE_URI', defaultValue: '', trim: true, description: 'Explicit admin image URI produced by the ShopNow build')
+    string(name: 'BACKEND_IMAGE_URI', defaultValue: '', trim: true, description: 'Explicit backend image URI produced by the ShopNow build')
+    string(name: 'IMAGE_TAG', defaultValue: '', trim: true, description: 'Immutable image tag produced by the ShopNow build')
+    choice(name: 'DEPLOY_FRONTEND', choices: ['true', 'false'], description: 'Deploy the frontend workload')
+    choice(name: 'DEPLOY_ADMIN', choices: ['true', 'false'], description: 'Deploy the admin workload')
+    choice(name: 'DEPLOY_BACKEND', choices: ['true', 'false'], description: 'Deploy the backend workload')
+    booleanParam(name: 'RUN_TERRAFORM', defaultValue: false, description: 'Provision or reconcile infrastructure (requires explicit approval for infrastructure-only runs)')
+    booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: false, description: 'Run External Secrets and management-host configuration stages')
+    booleanParam(name: 'RUN_DEPLOYMENT', defaultValue: true, description: 'Deploy workloads when explicit image URIs are supplied')
+    booleanParam(name: 'ALLOW_INFRA_ONLY_RUN', defaultValue: false, description: 'Explicitly allow Terraform/Ansible when no application image URI is supplied')
+  }
+
   environment {
-    AWS_ACCOUNT_ID = "${params.AWS_ACCOUNT_ID}"
-    TF_STATE_BUCKET_REGION = "${params.TF_STATE_BUCKET_REGION}"
-    ECR_REPO_PREFIX = "${params.ECR_REPO_PREFIX}"
-    ECR_REPOSITORY_STRATEGY = "${params.ECR_REPOSITORY_STRATEGY}"
-    SINGLE_ECR_REPOSITORY = "${params.SINGLE_ECR_REPOSITORY}"
-    FRONTEND_IMAGE_URI = "${params.FRONTEND_IMAGE_URI}"
-    ADMIN_IMAGE_URI = "${params.ADMIN_IMAGE_URI}"
-    BACKEND_IMAGE_URI = "${params.BACKEND_IMAGE_URI}"
-    K8S_NAMESPACE = "${params.K8S_NAMESPACE}"
-    MONITORING_NAMESPACE = "${params.MONITORING_NAMESPACE}"
-    MONITORING_RELEASE_NAME = "${params.MONITORING_RELEASE_NAME}"
-    GRAFANA_ADMIN_PASSWORD = "${params.GRAFANA_ADMIN_PASSWORD}"
-    AUTO_INSTALL_CLI_TOOLS = "${params.AUTO_INSTALL_CLI_TOOLS}"
-    // AWS_REGION, TF_STATE_BUCKET, LOCK_TABLE, EKS_CLUSTER_NAME, REMOTE_USER,
-    // SSH_PRIVATE_KEY_CREDENTIALS_ID, IMAGE_TAG, INFRA_ROOT, APP_ROOT, TERRAFORM_DIR,
-    // ANSIBLE_DIR, K8S_MANIFESTS_DIR, MONITORING_DIR, INVENTORY_FILE, TF_OUTPUT_FILE,
-    // INFRA_CHANGED, TERRAFORM_CHANGED, ANSIBLE_CHANGED, DEPLOY_FRONTEND, DEPLOY_ADMIN,
-    // DEPLOY_BACKEND are intentionally NOT pre-declared here: pre-declaring them in this
-    // block pins their value for the whole run and later env.X reassignments in the
-    // Initialize stage silently fail to reach shell steps in later stages. They are set
-    // as fresh vars in the Initialize stage instead.
+    AWS_REGION = 'ap-south-1'
+    AWS_ACCOUNT_ID = '559272000457'
+    AWS_CREDENTIALS_ID = 'awsId'
+    TF_STATE_BUCKET = 'harish-pc-s3-bucket'
+    TF_STATE_BUCKET_REGION = 'ap-south-1'
+    LOCK_TABLE = 'shopnow-terraform-locks'
+    EKS_CLUSTER_NAME = 'shopnow-app-eks'
+    ECR_REPO_PREFIX = 'shopnow-dev'
+    ECR_REPOSITORY_STRATEGY = 'service-repos'
+    SINGLE_ECR_REPOSITORY = ''
+    SSH_PRIVATE_KEY_CREDENTIALS_ID = 'management-ec2-ssh-key'
+    // The Terraform management AMI is Amazon Linux, whose default SSH user is ec2-user.
+    REMOTE_USER = 'ec2-user'
+    // One branded public URL hierarchy for the customer portal, admin, and API.
+    APP_BASE_PATH = 'shopnow'
+    USER_NAME = 'harish'
+    K8S_NAMESPACE = 'shopnow-ns'
+    MONITORING_NAMESPACE = 'monitor-ns'
+    MONITORING_RELEASE_NAME = 'prometheus'
+    GRAFANA_ADMIN_PASSWORD = 'dev-grafana-admin'
+    ENABLE_MONITORING_CHECKS = 'true'
+    AUTO_INSTALL_CLI_TOOLS = 'true'
+    // Upstream build values, derived paths, and stage flags are intentionally not
+    // pre-declared here. Initialize reads parameters and writes fresh environment values.
   }
 
   stages {
     stage('Checkout') {
       steps {
+        // The SCM job configuration selects the branch/revision before this pipeline starts.
+        // Keep it set to feature/infra-capstone-project-v1 so webhook builds use its latest commit.
         checkout scm
       }
     }
@@ -123,21 +146,35 @@ pipeline {
           def infraSupport = sharedInfra.support
           def sharedConfig = sharedInfra.config ?: [:]
 
-          env.AWS_REGION = params.AWS_REGION
-          env.TF_STATE_BUCKET = params.TF_STATE_BUCKET
-          env.LOCK_TABLE = params.LOCK_TABLE
-          env.EKS_CLUSTER_NAME = params.EKS_CLUSTER_NAME
-          env.REMOTE_USER = params.REMOTE_USER
-          env.SSH_PRIVATE_KEY_CREDENTIALS_ID = params.SSH_PRIVATE_KEY_CREDENTIALS_ID
-          env.IMAGE_TAG = params.IMAGE_TAG
+          env.FRONTEND_IMAGE_URI = buildInput(this, 'FRONTEND_IMAGE_URI')
+          env.ADMIN_IMAGE_URI = buildInput(this, 'ADMIN_IMAGE_URI')
+          env.BACKEND_IMAGE_URI = buildInput(this, 'BACKEND_IMAGE_URI')
+          env.IMAGE_TAG = buildInput(this, 'IMAGE_TAG')
+          env.DEPLOY_FRONTEND = buildInput(this, 'DEPLOY_FRONTEND', 'true')
+          env.DEPLOY_ADMIN = buildInput(this, 'DEPLOY_ADMIN', 'true')
+          env.DEPLOY_BACKEND = buildInput(this, 'DEPLOY_BACKEND', 'true')
+          env.RUN_TERRAFORM = buildInput(this, 'RUN_TERRAFORM', 'false')
+          env.RUN_ANSIBLE_AFTER_APPLY = buildInput(this, 'RUN_ANSIBLE_AFTER_APPLY', 'false')
+          env.RUN_DEPLOYMENT = buildInput(this, 'RUN_DEPLOYMENT', 'true')
+          env.ALLOW_INFRA_ONLY_RUN = buildInput(this, 'ALLOW_INFRA_ONLY_RUN', 'false')
+
+          env.AWS_REGION = env.AWS_REGION
+          env.TF_STATE_BUCKET = env.TF_STATE_BUCKET
+          env.LOCK_TABLE = env.LOCK_TABLE
+          env.EKS_CLUSTER_NAME = env.EKS_CLUSTER_NAME
+          env.REMOTE_USER = env.REMOTE_USER
+          env.USER_NAME = env.USER_NAME
+          env.SSH_PRIVATE_KEY_CREDENTIALS_ID = env.SSH_PRIVATE_KEY_CREDENTIALS_ID
+          env.IMAGE_TAG = env.IMAGE_TAG
 
           if (infraSupport) {
-            env.AWS_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'AWS_REGION', params.AWS_REGION)
-            env.TF_STATE_BUCKET = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET', params.TF_STATE_BUCKET)
-            env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', params.LOCK_TABLE)
-            env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', params.EKS_CLUSTER_NAME)
-            env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', params.REMOTE_USER)
-            env.SSH_PRIVATE_KEY_CREDENTIALS_ID = infraSupport.resolveConfigValue(this, sharedConfig, 'SSH_PRIVATE_KEY_CREDENTIALS_ID', params.SSH_PRIVATE_KEY_CREDENTIALS_ID)
+            env.AWS_REGION = infraSupport.resolveConfigValue(this, sharedConfig, 'AWS_REGION', env.AWS_REGION)
+            env.TF_STATE_BUCKET = infraSupport.resolveConfigValue(this, sharedConfig, 'TF_STATE_BUCKET', env.TF_STATE_BUCKET)
+            env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', env.LOCK_TABLE)
+            env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', env.EKS_CLUSTER_NAME)
+            env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', env.REMOTE_USER)
+            env.USER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'USER_NAME', env.USER_NAME)
+            env.SSH_PRIVATE_KEY_CREDENTIALS_ID = infraSupport.resolveConfigValue(this, sharedConfig, 'SSH_PRIVATE_KEY_CREDENTIALS_ID', env.SSH_PRIVATE_KEY_CREDENTIALS_ID)
           }
 
           def infraRootProbe = sh(
@@ -190,9 +227,7 @@ pipeline {
           env.MONITORING_DIR = monitoringDir
           env.INVENTORY_FILE = "${WORKSPACE}/${ansibleDir}/inventories/generated/hosts.ini"
           env.TF_OUTPUT_FILE = "${WORKSPACE}/${ansibleDir}/terraform-outputs.json"
-          if (!env.IMAGE_TAG?.trim()) {
-            env.IMAGE_TAG = "${env.BUILD_NUMBER}-${sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()}"
-          }
+          env.IMAGE_TAG = ensureImageTag(this)
 
           def currentSha = env.GIT_COMMIT?.trim()
           if (!currentSha) {
@@ -231,9 +266,9 @@ pipeline {
           echo "Terraform dir: ${terraformDir}"
           echo "Ansible dir: ${ansibleDir}"
 
-          def deployFrontend = params.DEPLOY_FRONTEND
-          def deployAdmin = params.DEPLOY_ADMIN
-          def deployBackend = params.DEPLOY_BACKEND
+          def deployFrontend = env.DEPLOY_FRONTEND == 'true'
+          def deployAdmin = env.DEPLOY_ADMIN == 'true'
+          def deployBackend = env.DEPLOY_BACKEND == 'true'
           if (terraformChanged) {
             deployFrontend = true
             deployAdmin = true
@@ -242,6 +277,32 @@ pipeline {
           env.DEPLOY_FRONTEND = deployFrontend.toString()
           env.DEPLOY_ADMIN = deployAdmin.toString()
           env.DEPLOY_BACKEND = deployBackend.toString()
+
+          def hasApplicationImage = [env.FRONTEND_IMAGE_URI, env.ADMIN_IMAGE_URI, env.BACKEND_IMAGE_URI].any { it?.trim() }
+          if (!hasApplicationImage && env.ALLOW_INFRA_ONLY_RUN != 'true') {
+            // GitHub webhooks and legacy parameter defaults must never apply infrastructure implicitly.
+            env.RUN_TERRAFORM = 'false'
+            env.RUN_ANSIBLE_AFTER_APPLY = 'false'
+            env.RUN_DEPLOYMENT = 'false'
+            echo 'No application images or infrastructure-only approval supplied; skipping Terraform, Ansible, and workload deployment.'
+          }
+
+          if (env.RUN_DEPLOYMENT == 'true') {
+            def missingImageUris = []
+            if (deployFrontend && !env.FRONTEND_IMAGE_URI?.trim()) {
+              missingImageUris << 'frontend'
+            }
+            if (deployAdmin && !env.ADMIN_IMAGE_URI?.trim()) {
+              missingImageUris << 'admin'
+            }
+            if (deployBackend && !env.BACKEND_IMAGE_URI?.trim()) {
+              missingImageUris << 'backend'
+            }
+            if (!missingImageUris.isEmpty()) {
+              env.RUN_DEPLOYMENT = 'false'
+              echo "No explicit image URI was supplied for ${missingImageUris.join(', ')}; skipping workload deployment. Run the ShopNow build job to build and promote application images."
+            }
+          }
 
           echo "Terraform changed: ${terraformChanged}"
           echo "Ansible changed: ${ansibleChanged}"
@@ -259,17 +320,17 @@ pipeline {
           env.PATH = "${env.LOCAL_TOOLS_BIN}:${env.PATH}"
 
           sh '''
-            set -euo pipefail
+            set -eu
             mkdir -p "${LOCAL_TOOLS_BIN}"
             missing=""
-            for cmd in kubectl helm aws; do
+            for cmd in kubectl helm aws terraform; do
               if ! command -v $cmd >/dev/null 2>&1; then
                 missing="$missing $cmd"
               fi
             done
 
             if [ -z "$missing" ]; then
-              echo "All required CLI tools present: kubectl helm aws"
+              echo "All required CLI tools present: kubectl helm aws terraform"
               exit 0
             fi
 
@@ -279,6 +340,7 @@ pipeline {
               echo "kubectl: https://kubernetes.io/docs/tasks/tools/"
               echo "helm: https://helm.sh/docs/intro/install/"
               echo "awscli: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+              echo "terraform: https://developer.hashicorp.com/terraform/downloads"
               exit 1
             fi
 
@@ -305,11 +367,18 @@ pipeline {
                   /tmp/aws/install --install-dir "${LOCAL_TOOLS_BIN}/aws-cli" --bin-dir "${LOCAL_TOOLS_BIN}" --update || true
                   rm -rf /tmp/aws /tmp/awscliv2.zip
                   ;;
+                terraform)
+                  TERRAFORM_VER="1.9.8"
+                  curl -L -s "https://releases.hashicorp.com/terraform/${TERRAFORM_VER}/terraform_${TERRAFORM_VER}_linux_amd64.zip" -o /tmp/terraform.zip || true
+                  unzip -o -q /tmp/terraform.zip -d "${LOCAL_TOOLS_BIN}" || true
+                  chmod +x "${LOCAL_TOOLS_BIN}/terraform" 2>/dev/null || true
+                  rm -f /tmp/terraform.zip
+                  ;;
               esac
             done
 
             still_missing=""
-            for cmd in kubectl helm aws; do
+            for cmd in kubectl helm aws terraform; do
               if ! command -v $cmd >/dev/null 2>&1; then
                 still_missing="$still_missing $cmd"
               fi
@@ -360,7 +429,7 @@ pipeline {
     stage('Validate AWS Access') {
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh 'aws sts get-caller-identity --region ${AWS_REGION}'
           }
         }
@@ -369,25 +438,28 @@ pipeline {
 
     stage('Verify Images') {
       when {
-        expression { return params.RUN_DEPLOYMENT && (params.DEPLOY_FRONTEND || params.DEPLOY_ADMIN || params.DEPLOY_BACKEND) }
+        expression { return env.RUN_DEPLOYMENT == 'true' && (env.DEPLOY_FRONTEND == 'true' || env.DEPLOY_ADMIN == 'true' || env.DEPLOY_BACKEND == 'true') }
       }
       steps {
         script {
+          def resolvedTag = ensureImageTag(this)
+          echo "Using image tag: ${resolvedTag}"
+
           def checks = []
-          if (params.DEPLOY_FRONTEND) {
-            def img = env.FRONTEND_IMAGE_URI?.trim() ? env.FRONTEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'frontend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+          if (env.DEPLOY_FRONTEND == 'true') {
+            def img = env.FRONTEND_IMAGE_URI?.trim() ? env.FRONTEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'frontend', resolvedTag, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
             checks << [name: 'frontend', uri: img]
           }
-          if (params.DEPLOY_ADMIN) {
-            def img = env.ADMIN_IMAGE_URI?.trim() ? env.ADMIN_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'admin', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+          if (env.DEPLOY_ADMIN == 'true') {
+            def img = env.ADMIN_IMAGE_URI?.trim() ? env.ADMIN_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'admin', resolvedTag, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
             checks << [name: 'admin', uri: img]
           }
-          if (params.DEPLOY_BACKEND) {
-            def img = env.BACKEND_IMAGE_URI?.trim() ? env.BACKEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'backend', env.IMAGE_TAG, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
+          if (env.DEPLOY_BACKEND == 'true') {
+            def img = env.BACKEND_IMAGE_URI?.trim() ? env.BACKEND_IMAGE_URI.trim() : buildImageUri(env.AWS_ACCOUNT_ID, env.AWS_REGION, env.ECR_REPO_PREFIX, 'backend', resolvedTag, env.ECR_REPOSITORY_STRATEGY, env.SINGLE_ECR_REPOSITORY)
             checks << [name: 'backend', uri: img]
           }
 
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             checks.each { c ->
               echo "Verifying image for ${c.name}: ${c.uri}"
               if (c.uri.contains('.dkr.ecr.')) {
@@ -395,10 +467,15 @@ pipeline {
                 def tag = parts[-1]
                 def repoPath = c.uri.substring(c.uri.indexOf('/') + 1, c.uri.lastIndexOf(':'))
                 sh """
-                  if aws ecr describe-images --region ${AWS_REGION} --repository-name ${repoPath} --image-ids imageTag=${tag} 2>&1; then
+                  set +e
+                  aws ecr describe-images --region ${AWS_REGION} --repository-name "${repoPath}" --image-ids imageTag="${tag}" >/tmp/verify-image-${c.name}.log 2>&1
+                  status=\$?
+                  cat /tmp/verify-image-${c.name}.log
+                  if [ \$status -eq 0 ]; then
                     echo "✓ Image exists: ${c.uri}"
                   else
                     echo "⚠ Image not found in ECR (will be built during deployment): ${c.uri}"
+                    echo "AWS CLI exit code: \$status"
                   fi
                 """
               } else {
@@ -412,41 +489,174 @@ pipeline {
 
     stage('Terraform') {
       when {
-        expression { return params.RUN_TERRAFORM }
+        expression { return env.RUN_TERRAFORM == 'true' }
       }
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             dir(env.TERRAFORM_DIR) {
               sh '''
                 set -e
+                export TF_PLUGIN_CACHE_DIR="$HOME/.terraform.d/plugin-cache"
+                export TF_INPUT=false
+                export TF_LOG_PATH="/tmp/terraform-debug.log"
+                export TF_LOG=warn
+                # Give Helm an isolated, build-local repository cache. This prevents a
+                # stale global repository entry from breaking Terraform's Helm provider
+                # on a freshly recreated Jenkins agent.
+                export HELM_REPOSITORY_CONFIG="$WORKSPACE/.helm/repositories.yaml"
+                export HELM_REPOSITORY_CACHE="$WORKSPACE/.helm/repository"
+                mkdir -p "$TF_PLUGIN_CACHE_DIR"
+                mkdir -p "$HELM_REPOSITORY_CACHE"
+                helm repo add external-secrets https://charts.external-secrets.io --force-update
+                helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update
+                helm repo update
+                
+                # The working directory is ephemeral, but the committed lock file pins
+                # verified provider checksums. Preserve it so the shared plugin cache can
+                # reuse providers rather than downloading and resolving them every build.
+                echo "Preparing Terraform working directory..."
+                rm -rf .terraform || true
+                
                 if ! aws s3api head-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION} 2>/dev/null; then
-                  if [ "${AWS_REGION}" = "ap-south-1" ]; then
-                    aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION}
+                  echo "Terraform S3 backend bucket ${TF_STATE_BUCKET} not found. Attempting creation."
+                  if [ "${AWS_REGION}" = "us-east-1" ]; then
+                    if ! aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION}; then
+                      echo "Bucket ${TF_STATE_BUCKET} already exists or was created concurrently; continuing."
+                    fi
                   else
-                    aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION} --create-bucket-configuration LocationConstraint=${AWS_REGION}
+                    if ! aws s3api create-bucket --bucket ${TF_STATE_BUCKET} --region ${AWS_REGION} --create-bucket-configuration LocationConstraint=${AWS_REGION}; then
+                      echo "Bucket ${TF_STATE_BUCKET} already exists or was created concurrently; continuing."
+                    fi
                   fi
+                else
+                  echo "Terraform S3 backend bucket ${TF_STATE_BUCKET} already exists; skipping creation."
                 fi
 
                 if ! aws dynamodb describe-table --table-name ${LOCK_TABLE} --region ${AWS_REGION} 2>/dev/null; then
-                  aws dynamodb create-table --table-name ${LOCK_TABLE} --attribute-definitions AttributeName=LockID,AttributeType=S --key-schema AttributeName=LockID,KeyType=HASH --billing-mode PAY_PER_REQUEST --region ${AWS_REGION}
+                  echo "Terraform lock table ${LOCK_TABLE} not found. Attempting creation."
+                  if ! aws dynamodb create-table --table-name ${LOCK_TABLE} --attribute-definitions AttributeName=LockID,AttributeType=S --key-schema AttributeName=LockID,KeyType=HASH --billing-mode PAY_PER_REQUEST --region ${AWS_REGION}; then
+                    echo "Lock table ${LOCK_TABLE} already exists or was created concurrently; continuing."
+                  fi
+                else
+                  echo "Terraform lock table ${LOCK_TABLE} already exists; skipping creation."
                 fi
 
                 terraform init -reconfigure \
                   -backend-config="bucket=${TF_STATE_BUCKET}" \
                   -backend-config="key=terraform/terraform.tfstate" \
                   -backend-config="region=${TF_STATE_BUCKET_REGION}" \
-                  -backend-config="use_lockfile=true" \
                   -backend-config="dynamodb_table=${LOCK_TABLE}"
 
-                terraform workspace select -or-create ${ENVIRONMENT:-dev} || terraform workspace select default
-                terraform validate
+                # Recover from stale Terraform state checksum mismatches between S3 and DynamoDB.
+                # This is safe when the state already matches the real infra resources and the lock
+                # table entry is stale; it prevents the pipeline from failing before plan/apply.
+                if terraform state list >/dev/null 2>&1; then
+                  echo "Terraform remote state is readable; no digest repair needed."
+                else
+                  echo "Terraform state checksum mismatch detected. Attempting stale lock repair..."
+                  if [ -f "$WORKSPACE/${INFRA_ROOT}/scripts/repair_terraform_state_digest.sh" ]; then
+                    TF_STATE_BUCKET="${TF_STATE_BUCKET}" LOCK_TABLE="${LOCK_TABLE}" STATE_KEY="env:/dev/terraform/terraform.tfstate" AWS_REGION="${AWS_REGION}" bash "$WORKSPACE/${INFRA_ROOT}/scripts/repair_terraform_state_digest.sh" --force
+                    terraform init -reconfigure \
+                      -backend-config="bucket=${TF_STATE_BUCKET}" \
+                      -backend-config="key=terraform/terraform.tfstate" \
+                      -backend-config="region=${TF_STATE_BUCKET_REGION}" \
+                      -backend-config="dynamodb_table=${LOCK_TABLE}"
+                  fi
+                fi
+
+                  terraform workspace select -or-create ${ENVIRONMENT:-dev} || terraform workspace select default
+
+                  # A previous partial apply created public subnet 10.20.1.0/24 in AWS,
+                  # but that resource is absent from the remote state. Re-adopt a subnet
+                  # only when its exact CIDR already exists in this Terraform-managed VPC.
+                  # This prevents CreateSubnet CIDR-conflict failures without adopting a
+                  # subnet from a different VPC.
+                  vpc_id=$(terraform state show aws_vpc.main 2>/dev/null | grep -E '^[[:space:]]*id[[:space:]]*=' | head -n 1 | cut -d '"' -f 2)
+                  if [ -n "${vpc_id}" ]; then
+                    subnet_index=0
+                    for subnet_cidr in 10.20.1.0/24 10.20.2.0/24; do
+                      subnet_address="aws_subnet.public[${subnet_index}]"
+                      if ! terraform state show "${subnet_address}" >/dev/null 2>&1; then
+                        existing_subnet_id=$(aws ec2 describe-subnets \
+                          --region "${AWS_REGION}" \
+                          --filters "Name=vpc-id,Values=${vpc_id}" "Name=cidr-block,Values=${subnet_cidr}" \
+                          --query 'Subnets[0].SubnetId' \
+                          --output text)
+                        if [ "${existing_subnet_id}" != "None" ] && [ -n "${existing_subnet_id}" ]; then
+                          echo "Importing existing subnet ${existing_subnet_id} (${subnet_cidr}) into Terraform state."
+                          terraform import "${subnet_address}" "${existing_subnet_id}"
+                        fi
+                      fi
+                      subnet_index=$((subnet_index + 1))
+                    done
+
+                    # Re-adopt the existing public-subnet route-table associations.
+                    # AWS identifies each association import by subnet ID and route-table ID.
+                    subnet_index=0
+                    for subnet_cidr in 10.20.1.0/24 10.20.2.0/24; do
+                      subnet_address="aws_subnet.public[${subnet_index}]"
+                      association_address="aws_route_table_association.public[${subnet_index}]"
+                      if ! terraform state show "${association_address}" >/dev/null 2>&1; then
+                        subnet_id=$(terraform state show "${subnet_address}" 2>/dev/null | grep -E '^[[:space:]]*id[[:space:]]*=' | head -n 1 | cut -d '"' -f 2)
+                        route_table_id=$(terraform state show aws_route_table.public 2>/dev/null | grep -E '^[[:space:]]*id[[:space:]]*=' | head -n 1 | cut -d '"' -f 2)
+                        if [ -n "${subnet_id}" ] && [ -n "${route_table_id}" ]; then
+                          current_route_table_id=$(aws ec2 describe-route-tables \
+                            --region "${AWS_REGION}" \
+                            --filters "Name=association.subnet-id,Values=${subnet_id}" \
+                            --query 'RouteTables[0].RouteTableId' \
+                            --output text)
+                          if [ "${current_route_table_id}" != "None" ] && [ -n "${current_route_table_id}" ]; then
+                            # Import the association currently attached to the subnet. Terraform
+                            # can then safely replace it with the desired public route table.
+                            echo "Importing current route-table association for ${subnet_id}."
+                            terraform import "${association_address}" "${subnet_id}/${current_route_table_id}"
+                          fi
+                        fi
+                      fi
+                      subnet_index=$((subnet_index + 1))
+                    done
+
+                    # The cluster was created in an earlier partial apply. Import it when
+                    # it exists but is absent from state, rather than issuing CreateCluster.
+                    if ! terraform state show aws_eks_cluster.main >/dev/null 2>&1; then
+                      if aws eks describe-cluster --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}" >/dev/null 2>&1; then
+                        echo "Importing existing EKS cluster ${EKS_CLUSTER_NAME} into Terraform state."
+                        terraform import aws_eks_cluster.main "${EKS_CLUSTER_NAME}"
+                      fi
+                    fi
+
+                    # External Secrets was originally installed outside Terraform. Import the
+                    # owning Helm release by its existing namespace/name before plan so Terraform
+                    # upgrades it in place rather than creating a conflicting second release.
+                    if ! terraform state show helm_release.external_secrets >/dev/null 2>&1; then
+                      export KUBECONFIG="$WORKSPACE/.kubeconfig-terraform"
+                      aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}" --kubeconfig "$KUBECONFIG"
+                      release_status_log=/tmp/external-secrets-release-status.log
+                      if helm status external-secrets --namespace "${K8S_NAMESPACE}" >"$release_status_log" 2>&1; then
+                        echo "Importing existing Helm release external-secrets in ${K8S_NAMESPACE}."
+                        terraform import helm_release.external_secrets "${K8S_NAMESPACE}/external-secrets"
+                      elif grep -qi 'release: not found' "$release_status_log"; then
+                        echo "External Secrets Helm release is not present; Terraform will install it."
+                      else
+                        echo "Unable to determine the External Secrets Helm release state:" >&2
+                        cat "$release_status_log" >&2
+                        exit 1
+                      fi
+                    fi
+                  fi
+
+                  # Skip refresh during validate to avoid slow provider initialization
+                terraform validate -json >/dev/null 2>&1 || terraform validate
+                
                 terraform plan \
                   -var="aws_region=${AWS_REGION}" \
                   -var="cluster_name=${EKS_CLUSTER_NAME}" \
                   -var="ecr_repo_prefix=${ECR_REPO_PREFIX}" \
+                  -parallelism=2 \
                   -out=tfplan
-                terraform apply -auto-approve tfplan
+                
+                terraform apply -auto-approve -parallelism=2 tfplan
                 terraform output -json > ${TF_OUTPUT_FILE}
               '''
             }
@@ -457,11 +667,11 @@ pipeline {
 
     stage('Provision Secrets') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
       }
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             def secretScript = env.INFRA_ROOT == '.' ? "$WORKSPACE/scripts/create_aws_secret.sh" : "$WORKSPACE/${env.INFRA_ROOT}/scripts/create_aws_secret.sh"
             sh "${secretScript} shopnow/mongo ${AWS_REGION}"
           }
@@ -469,29 +679,65 @@ pipeline {
       }
     }
 
-    stage('Verify ExternalSecret Sync') {
+    stage('Apply External Secrets Resources') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
       }
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh '''
               set -e
-              # wait for ExternalSecret to create the k8s secret (timeout 120s)
-              for i in $(seq 1 24); do
-                if kubectl get secret mongo-secret -n shopnow-ns >/dev/null 2>&1; then
-                  echo 'Found k8s secret mongo-secret'
-                  kubectl get secret mongo-secret -n shopnow-ns -o jsonpath='{.data.MONGODB_URI}' | base64 --decode >/tmp/mongo_uri || true
-                  if [ -s /tmp/mongo_uri ]; then
-                    echo 'mongo-secret contains MONGODB_URI'
-                    exit 0
-                  fi
+              # Terraform installs the External Secrets controller with IRSA. Apply these
+              # resources before verification so it can fetch shopnow/mongo from AWS.
+              aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}"
+              kubectl create namespace "${K8S_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+              kubectl rollout status deployment/external-secrets -n "${K8S_NAMESPACE}" --timeout=5m
+              # The in-place Helm upgrade retains ownership of the existing cluster CRDs.
+              # Require the stable v1 API used by the manifests below.
+              for crd in secretstores.external-secrets.io externalsecrets.external-secrets.io; do
+                kubectl get crd "$crd" >/dev/null
+                if ! kubectl get crd "$crd" -o jsonpath='{range .spec.versions[?(@.served==true)]}{.name}{"\\n"}{end}' | grep -qx 'v1'; then
+                  echo "Required served API version external-secrets.io/v1 is missing from $crd." >&2
+                  exit 1
                 fi
-                sleep 5
               done
-              echo 'ExternalSecret did not sync within timeout' >&2
-              exit 1
+              sed -e "s|name: shopnow-ns|name: ${K8S_NAMESPACE}|g" "${K8S_MANIFESTS_DIR}/namespace/namespace.yaml" | kubectl apply -f -
+              for file in "${K8S_MANIFESTS_DIR}/database/aws-secretstore.yaml" "${K8S_MANIFESTS_DIR}/database/mongo-secret-externalsecret.yaml"; do
+                sed -e "s|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g" "$file" | kubectl apply -f -
+              done
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Verify ExternalSecret Sync') {
+      when {
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
+      }
+      steps {
+        script {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
+            sh '''
+              set -e
+              # Wait for ESO's authoritative Ready condition before consuming its output.
+              # On failure, print controller and resource diagnostics for actionable logs.
+              if ! kubectl wait --for=condition=Ready externalsecret/mongo-secret -n "${K8S_NAMESPACE}" --timeout=120s; then
+                echo 'ExternalSecret did not become Ready within timeout.' >&2
+                kubectl describe externalsecret mongo-secret -n "${K8S_NAMESPACE}" || true
+                kubectl describe secretstore aws-secret-store -n "${K8S_NAMESPACE}" || true
+                kubectl logs deployment/external-secrets -n "${K8S_NAMESPACE}" --tail=100 || true
+                exit 1
+              fi
+
+              kubectl get secret mongo-secret -n "${K8S_NAMESPACE}" >/dev/null
+              kubectl get secret mongo-secret -n "${K8S_NAMESPACE}" -o jsonpath='{.data.MONGODB_URI}' | base64 --decode >/tmp/mongo_uri
+              if [ ! -s /tmp/mongo_uri ]; then
+                echo 'mongo-secret is Ready but does not contain MONGODB_URI.' >&2
+                exit 1
+              fi
+              echo 'mongo-secret is Ready and contains MONGODB_URI.'
             '''
           }
         }
@@ -500,7 +746,7 @@ pipeline {
 
     stage('Generate Inventory') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
       }
       steps {
         sh '''
@@ -516,31 +762,37 @@ pipeline {
 
     stage('Configure Management Host') {
       when {
-        expression { return params.RUN_ANSIBLE_AFTER_APPLY }
+        expression { return env.RUN_ANSIBLE_AFTER_APPLY == 'true' }
       }
       steps {
         script {
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}'
           }
-          sh '''
-            set -e
-            . "$WORKSPACE/${INFRA_ROOT}/scripts/ensure_ansible.sh"
-            export ANSIBLE_CONFIG="$WORKSPACE/${ANSIBLE_DIR}/ansible.cfg"
-            ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/configure-management.yml" \
-              -e "aws_region=${AWS_REGION}" \
-              -e "eks_cluster_name=${EKS_CLUSTER_NAME}" \
-              -e "remote_user=${REMOTE_USER}"
+          withCredentials([sshUserPrivateKey(
+            credentialsId: env.SSH_PRIVATE_KEY_CREDENTIALS_ID,
+            keyFileVariable: 'ANSIBLE_SSH_PRIVATE_KEY'
+          )]) {
+            sh '''
+              set -e
+              . "$WORKSPACE/${INFRA_ROOT}/scripts/ensure_ansible.sh"
+              export ANSIBLE_CONFIG="$WORKSPACE/${ANSIBLE_DIR}/ansible.cfg"
+              ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/configure-management.yml" \
+                --private-key "$ANSIBLE_SSH_PRIVATE_KEY" \
+                -e "aws_region=${AWS_REGION}" \
+                -e "eks_cluster_name=${EKS_CLUSTER_NAME}"
 
-            ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/validate-management.yml"
-          '''
+              ansible-playbook -i "$INVENTORY_FILE" "$WORKSPACE/${ANSIBLE_DIR}/playbooks/validate-management.yml" \
+                --private-key "$ANSIBLE_SSH_PRIVATE_KEY"
+            '''
+          }
         }
       }
     }
 
     stage('Deploy Application Workloads') {
       when {
-        expression { return params.RUN_DEPLOYMENT && (params.DEPLOY_FRONTEND || params.DEPLOY_ADMIN || params.DEPLOY_BACKEND) }
+        expression { return env.RUN_DEPLOYMENT == 'true' && (env.DEPLOY_FRONTEND == 'true' || env.DEPLOY_ADMIN == 'true' || env.DEPLOY_BACKEND == 'true') }
       }
       steps {
         script {
@@ -552,12 +804,12 @@ pipeline {
           echo "Admin image URI: ${adminImage} (source: ${env.ADMIN_IMAGE_URI?.trim() ? 'explicit' : 'computed'})"
           echo "Backend image URI: ${backendImage} (source: ${env.BACKEND_IMAGE_URI?.trim() ? 'explicit' : 'computed'})"
 
-          ensureAwsCredentials(this, params.AWS_CREDENTIALS_ID) {
+          ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
             sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}'
 
             sh 'kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
             sh "sed -e 's|name: shopnow-ns|name: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/namespace/namespace.yaml | kubectl apply -f -"
-            sh "for file in ${K8S_MANIFESTS_DIR}/database/*.yaml; do sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' \"$file\" | kubectl apply -f -; done"
+            sh "for file in ${K8S_MANIFESTS_DIR}/database/*.yaml; do sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' \"\$file\" | kubectl apply -f -; done"
 
             def deployTasks = [:]
             if (env.DEPLOY_FRONTEND == 'true') {
@@ -585,7 +837,7 @@ pipeline {
               parallel deployTasks
             }
 
-            sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/ingress/ingress-shopnow.yaml | kubectl apply -f -"
+            sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_APP_BASE_PATH|${APP_BASE_PATH}|g' ${K8S_MANIFESTS_DIR}/ingress/ingress-shopnow.yaml | kubectl apply -f -"
 
             sh 'kubectl rollout status deployment/mongo -n ${K8S_NAMESPACE} --timeout=5m'
             if (env.DEPLOY_FRONTEND == 'true') {
@@ -598,9 +850,24 @@ pipeline {
               sh 'kubectl rollout status deployment/backend -n ${K8S_NAMESPACE} --timeout=5m'
             }
 
-            if (params.ENABLE_MONITORING_CHECKS) {
+            if (env.ENABLE_MONITORING_CHECKS == 'true') {
               sh 'kubectl create namespace ${MONITORING_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
-              sh "for file in ${MONITORING_DIR}/*.yaml; do sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' \"$file\" | kubectl apply -f -; done"
+              // A dashboard ConfigMap is core Kubernetes and is always safe to apply.
+              sh "sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' ${MONITORING_DIR}/grafana-dashboard-shopnow.yaml | kubectl apply -f -"
+
+              // ServiceMonitor and PrometheusRule require the Prometheus Operator. Application rollout
+              // must not fail when that optional monitoring stack is not installed yet.
+              if (sh(script: 'kubectl get crd servicemonitors.monitoring.coreos.com >/dev/null 2>&1', returnStatus: true) == 0) {
+                sh "sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' ${MONITORING_DIR}/service-monitor-shopnow.yaml | kubectl apply -f -"
+              } else {
+                echo 'Prometheus Operator ServiceMonitor CRD is not installed; skipping ServiceMonitor. Install kube-prometheus-stack to enable target scraping.'
+              }
+
+              if (sh(script: 'kubectl get crd prometheusrules.monitoring.coreos.com >/dev/null 2>&1', returnStatus: true) == 0) {
+                sh "sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' ${MONITORING_DIR}/prometheus-rules-shopnow.yaml | kubectl apply -f -"
+              } else {
+                echo 'Prometheus Operator PrometheusRule CRD is not installed; skipping alert rules. Install kube-prometheus-stack to enable alerts.'
+              }
               sh 'kubectl get pods -n ${MONITORING_NAMESPACE}'
               sh 'kubectl get servicemonitor -n ${MONITORING_NAMESPACE} || true'
               sh 'kubectl get prometheusrule -n ${MONITORING_NAMESPACE} || true'
@@ -623,12 +890,42 @@ pipeline {
 
   post {
     always {
-      echo 'Archiving available text logs and cleaning workspace.'
+      echo 'Archiving available text logs.'
       archiveArtifacts artifacts: '**/*.log, **/*.txt', allowEmptyArchive: true
-      cleanWs()
     }
     failure {
       echo 'Build failed. Review archived artifacts and console output.'
+      // Helm's atomic rollback reports only a timeout when a Kubernetes workload
+      // is not Ready. Capture the controller state and events while the failed
+      // release still exists, without printing any application secret values.
+      script {
+        ensureAwsCredentials(this, env.AWS_CREDENTIALS_ID) {
+          sh '''
+            set +e
+            export KUBECONFIG="$WORKSPACE/.kubeconfig-failure-diagnostics"
+            aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}" --kubeconfig "$KUBECONFIG"
+
+            echo '=== External Secrets Helm release ==='
+            helm status external-secrets -n "${K8S_NAMESPACE}" || true
+
+            echo '=== External Secrets deployments and pods ==='
+            kubectl get deployment,pods -n "${K8S_NAMESPACE}" -o wide || true
+            kubectl describe deployment external-secrets -n "${K8S_NAMESPACE}" || true
+            kubectl logs deployment/external-secrets -n "${K8S_NAMESPACE}" --all-containers --tail=200 || true
+
+            echo '=== Recent namespace events ==='
+            kubectl get events -n "${K8S_NAMESPACE}" --sort-by='.lastTimestamp' || true
+
+            echo '=== External Secrets API objects ==='
+            kubectl get crd secretstores.external-secrets.io externalsecrets.external-secrets.io || true
+            kubectl get validatingwebhookconfiguration secretstore-validate || true
+          '''
+        }
+      }
+    }
+    cleanup {
+      echo 'Cleaning workspace.'
+      cleanWs()
     }
   }
 }

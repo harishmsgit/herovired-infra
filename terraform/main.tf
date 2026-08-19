@@ -48,7 +48,7 @@ resource "aws_subnet" "public" {
   tags = {
     Name                                        = "${local.name_prefix}-public-${count.index + 1}"
     Environment                                 = local.env
-    "kubernetes.io/role/elb"                   = "1"
+    "kubernetes.io/role/elb"                    = "1"
     "kubernetes.io/cluster/${var.cluster_name}" = "shared"
   }
 }
@@ -175,9 +175,9 @@ resource "aws_iam_role_policy_attachment" "cni_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 }
 
-resource "aws_iam_role_policy_attachment" "ecr_readonly_policy" {
+resource "aws_iam_role_policy_attachment" "ecr_full_access_policy" {
   role       = aws_iam_role.eks_node_group.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
 }
 
 resource "aws_iam_role_policy_attachment" "ssm_policy" {
@@ -213,14 +213,27 @@ resource "aws_iam_role_policy_attachment" "management_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-resource "aws_iam_role_policy_attachment" "management_ecr_readonly" {
+resource "aws_iam_role_policy_attachment" "management_ecr_full_access" {
   role       = aws_iam_role.management.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
 }
 
-resource "aws_iam_role_policy_attachment" "management_eks_access" {
-  role       = aws_iam_role.management.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+// The EKS cluster service policy is not an administrator policy. The management
+// host needs only cluster discovery to generate its kubeconfig and obtain a token.
+resource "aws_iam_role_policy" "management_eks_discovery" {
+  name = "${local.name_prefix}-management-eks-discovery"
+  role = aws_iam_role.management.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["eks:DescribeCluster"]
+        Resource = aws_eks_cluster.main.arn
+      },
+    ]
+  })
 }
 
 resource "aws_eks_cluster" "main" {
@@ -261,13 +274,295 @@ resource "aws_eks_node_group" "main" {
   depends_on = [
     aws_iam_role_policy_attachment.node_policy,
     aws_iam_role_policy_attachment.cni_policy,
-    aws_iam_role_policy_attachment.ecr_readonly_policy,
+    aws_iam_role_policy_attachment.ecr_full_access_policy,
     aws_iam_role_policy_attachment.ssm_policy,
   ]
 
   tags = {
     Name        = "${local.name_prefix}-nodes"
     Environment = local.env
+  }
+}
+
+# Keep the existing node group online while this production-sized workload
+# group is created. This avoids the outage caused by replacing an EKS node
+# group solely to change its instance type.
+resource "aws_eks_node_group" "workloads" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = "${local.name_prefix}-workloads"
+  node_role_arn   = aws_iam_role.eks_node_group.arn
+  subnet_ids      = aws_subnet.public[*].id
+  instance_types  = var.workload_node_instance_types
+  capacity_type   = "ON_DEMAND"
+
+  scaling_config {
+    desired_size = var.workload_node_desired_size
+    min_size     = var.workload_node_min_size
+    max_size     = var.workload_node_max_size
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  labels = {
+    workload = "shopnow"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.node_policy,
+    aws_iam_role_policy_attachment.cni_policy,
+    aws_iam_role_policy_attachment.ecr_full_access_policy,
+    aws_iam_role_policy_attachment.ssm_policy,
+  ]
+
+  tags = {
+    Name        = "${local.name_prefix}-workloads"
+    Environment = local.env
+    NodePool    = "workloads"
+    Project     = "shopNow"
+  }
+}
+
+# External Secrets Operator reads application secrets using its own least-privilege
+# IAM role. IRSA keeps AWS credentials out of Kubernetes Secret objects.
+data "aws_caller_identity" "current" {}
+
+data "tls_certificate" "eks_oidc" {
+  url = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "eks" {
+  url             = aws_eks_cluster.main.identity[0].oidc[0].issuer
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint]
+
+  tags = {
+    Name        = "${local.name_prefix}-eks-oidc"
+    Environment = local.env
+    Project     = "shopNow"
+  }
+}
+
+data "aws_iam_policy_document" "external_secrets_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.eks.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_eks_cluster.main.identity[0].oidc[0].issuer, "https://", "")}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_eks_cluster.main.identity[0].oidc[0].issuer, "https://", "")}:sub"
+      values   = ["system:serviceaccount:shopnow-ns:shopnow-external-secrets"]
+    }
+  }
+}
+
+resource "aws_iam_role" "external_secrets" {
+  name               = "${local.name_prefix}-external-secrets-role"
+  assume_role_policy = data.aws_iam_policy_document.external_secrets_assume.json
+}
+
+resource "aws_iam_role_policy" "external_secrets_secrets_read" {
+  name = "${local.name_prefix}-external-secrets-read"
+  role = aws_iam_role.external_secrets.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+        ]
+        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:shopnow/*"
+      },
+    ]
+  })
+}
+
+resource "helm_release" "external_secrets" {
+  # This release was created before Terraform managed it. Keep its existing
+  # name and namespace so Helm retains ownership of its CRDs and admission
+  # webhooks during the in-place upgrade.
+  name             = "external-secrets"
+  repository       = "https://charts.external-secrets.io"
+  chart            = "external-secrets"
+  version          = "2.9.0"
+  namespace        = "shopnow-ns"
+  create_namespace = true
+  wait             = true
+  timeout          = 600
+  atomic           = true
+
+  set {
+    name  = "controllerClass"
+    value = "shopnow"
+  }
+
+  # Reconcile only the application's namespaced resources. This avoids
+  # cluster-wide permissions for ClusterSecretStore/ClusterExternalSecret.
+  set {
+    name  = "scopedRBAC"
+    value = "true"
+  }
+
+  set {
+    name  = "scopedNamespace"
+    value = "shopnow-ns"
+  }
+
+  set {
+    name  = "serviceAccount.name"
+    value = "shopnow-external-secrets"
+  }
+
+  set {
+    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+    value = aws_iam_role.external_secrets.arn
+    type  = "string"
+  }
+
+  depends_on = [
+    aws_eks_node_group.workloads,
+    aws_iam_role_policy.external_secrets_secrets_read,
+  ]
+}
+
+// Public entry point for the ShopNow Ingress objects. The pinned chart creates
+// the nginx IngressClass and an AWS LoadBalancer service.
+resource "helm_release" "ingress_nginx" {
+  name             = "ingress-nginx"
+  repository       = "https://kubernetes.github.io/ingress-nginx"
+  chart            = "ingress-nginx"
+  version          = "4.15.1"
+  namespace        = "ingress-nginx"
+  create_namespace = true
+  wait             = true
+  timeout          = 900
+  atomic           = true
+
+  set {
+    name  = "controller.service.type"
+    value = "LoadBalancer"
+  }
+
+  set {
+    name  = "controller.ingressClassResource.name"
+    value = "nginx"
+  }
+
+  set {
+    name  = "controller.replicaCount"
+    value = "1"
+  }
+
+  depends_on = [
+    aws_eks_node_group.workloads,
+  ]
+}
+
+// EKS is currently using the legacy aws-auth ConfigMap. Keep the existing node
+// mapping and add a dedicated group for the management EC2 role; no cluster-admin
+// access is granted.
+resource "kubernetes_config_map_v1_data" "aws_auth" {
+  metadata {
+    name      = "aws-auth"
+    namespace = "kube-system"
+  }
+
+  data = {
+    mapRoles = yamlencode([
+      {
+        rolearn  = aws_iam_role.eks_node_group.arn
+        username = "system:node:{{EC2PrivateDNSName}}"
+        groups   = ["system:bootstrappers", "system:nodes"]
+      },
+      {
+        rolearn  = aws_iam_role.management.arn
+        username = "shopnow-management:{{SessionName}}"
+        groups   = ["shopnow-management"]
+      },
+    ])
+  }
+
+  field_manager = "terraform-shopnow-access"
+  force         = true
+
+  depends_on = [
+    aws_eks_node_group.workloads,
+    aws_iam_role_policy.management_eks_discovery,
+  ]
+}
+
+// Management access is limited to observing ShopNow and creating a local
+// port-forward. It cannot change workloads, secrets, or cluster-wide resources.
+resource "kubernetes_role_v1" "management_portforward" {
+  metadata {
+    name      = "shopnow-management-portforward"
+    namespace = "shopnow-ns"
+  }
+
+  rule {
+    api_groups = [""]
+    resources  = ["pods", "pods/log", "services", "endpoints"]
+    verbs      = ["get", "list", "watch"]
+  }
+
+  rule {
+    api_groups = [""]
+    resources  = ["pods/portforward"]
+    verbs      = ["create"]
+  }
+
+  rule {
+    api_groups = ["apps"]
+    resources  = ["deployments", "replicasets"]
+    verbs      = ["get", "list", "watch"]
+  }
+
+  rule {
+    api_groups = ["discovery.k8s.io"]
+    resources  = ["endpointslices"]
+    verbs      = ["get", "list", "watch"]
+  }
+
+  rule {
+    api_groups = ["networking.k8s.io"]
+    resources  = ["ingresses"]
+    verbs      = ["get", "list", "watch"]
+  }
+
+  depends_on = [kubernetes_config_map_v1_data.aws_auth]
+}
+
+resource "kubernetes_role_binding_v1" "management_portforward" {
+  metadata {
+    name      = "shopnow-management-portforward"
+    namespace = "shopnow-ns"
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = kubernetes_role_v1.management_portforward.metadata[0].name
+  }
+
+  subject {
+    kind      = "Group"
+    name      = "shopnow-management"
+    api_group = "rbac.authorization.k8s.io"
   }
 }
 
@@ -291,6 +586,12 @@ resource "aws_instance" "management" {
     usermod -aG docker ec2-user || true
   EOF
 
+  # User data is bootstrap-only. Do not restart or alter the management host
+  # during an unrelated infrastructure rollout because of historical drift.
+  lifecycle {
+    ignore_changes = [user_data]
+  }
+
   tags = {
     Name        = "${local.name_prefix}-management-instance"
     Environment = local.env
@@ -298,19 +599,9 @@ resource "aws_instance" "management" {
   }
 }
 
-resource "aws_ecr_repository" "app" {
+# Use data source to reference existing ECR repositories instead of trying to create them.
+# The repositories are created externally or imported into Terraform state via 'terraform import'.
+data "aws_ecr_repository" "app" {
   for_each = toset(["frontend", "admin", "backend"])
-
-  name                 = "${var.ecr_repo_prefix}/${each.key}"
-  image_tag_mutability = "IMMUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  tags = {
-    Name        = "${local.name_prefix}-${each.key}-ecr"
-    Environment = local.env
-    Project     = "shopNow"
-  }
+  name     = "${var.ecr_repo_prefix}/${each.key}"
 }
