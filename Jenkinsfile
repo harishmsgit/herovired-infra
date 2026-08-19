@@ -66,6 +66,16 @@ def ensureImageTag(script) {
   return script.env.IMAGE_TAG
 }
 
+def buildInput(script, String name, String defaultValue = '') {
+  def value = script.params[name]
+  if (value == null) {
+    value = script.env[name]
+  }
+
+  value = value == null ? '' : value.toString().trim()
+  return (value && value != 'null') ? value : defaultValue
+}
+
 pipeline {
   agent any
 
@@ -75,6 +85,21 @@ pipeline {
     disableConcurrentBuilds()
     timeout(time: 75, unit: 'MINUTES')
     buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+  }
+
+  // Contract used by the ShopNow build job when it starts this deployment job.
+  // Direct infrastructure runs skip workload deployment when no image URIs are supplied.
+  parameters {
+    string(name: 'FRONTEND_IMAGE_URI', defaultValue: '', trim: true, description: 'Explicit frontend image URI produced by the ShopNow build')
+    string(name: 'ADMIN_IMAGE_URI', defaultValue: '', trim: true, description: 'Explicit admin image URI produced by the ShopNow build')
+    string(name: 'BACKEND_IMAGE_URI', defaultValue: '', trim: true, description: 'Explicit backend image URI produced by the ShopNow build')
+    string(name: 'IMAGE_TAG', defaultValue: '', trim: true, description: 'Immutable image tag produced by the ShopNow build')
+    choice(name: 'DEPLOY_FRONTEND', choices: ['true', 'false'], description: 'Deploy the frontend workload')
+    choice(name: 'DEPLOY_ADMIN', choices: ['true', 'false'], description: 'Deploy the admin workload')
+    choice(name: 'DEPLOY_BACKEND', choices: ['true', 'false'], description: 'Deploy the backend workload')
+    booleanParam(name: 'RUN_TERRAFORM', defaultValue: true, description: 'Provision or reconcile infrastructure')
+    booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Run External Secrets and management-host configuration stages')
+    booleanParam(name: 'RUN_DEPLOYMENT', defaultValue: true, description: 'Deploy workloads when explicit image URIs are supplied')
   }
 
   environment {
@@ -88,33 +113,17 @@ pipeline {
     ECR_REPO_PREFIX = 'shopnow-dev'
     ECR_REPOSITORY_STRATEGY = 'service-repos'
     SINGLE_ECR_REPOSITORY = ''
-    FRONTEND_IMAGE_URI = ''
-    ADMIN_IMAGE_URI = ''
-    BACKEND_IMAGE_URI = ''
-    IMAGE_TAG = ''
-    DEPLOY_FRONTEND = 'true'
-    DEPLOY_ADMIN = 'true'
-    DEPLOY_BACKEND = 'true'
     SSH_PRIVATE_KEY_CREDENTIALS_ID = 'management-ec2-ssh-key'
     // The Terraform management AMI is Amazon Linux, whose default SSH user is ec2-user.
     REMOTE_USER = 'ec2-user'
-    RUN_TERRAFORM = 'true'
-    RUN_ANSIBLE_AFTER_APPLY = 'true'
-    RUN_DEPLOYMENT = 'true'
     K8S_NAMESPACE = 'shopnow-ns'
     MONITORING_NAMESPACE = 'monitor-ns'
     MONITORING_RELEASE_NAME = 'prometheus'
     GRAFANA_ADMIN_PASSWORD = 'dev-grafana-admin'
     ENABLE_MONITORING_CHECKS = 'true'
     AUTO_INSTALL_CLI_TOOLS = 'true'
-    // AWS_REGION, TF_STATE_BUCKET, LOCK_TABLE, EKS_CLUSTER_NAME, REMOTE_USER,
-    // SSH_PRIVATE_KEY_CREDENTIALS_ID, IMAGE_TAG, INFRA_ROOT, APP_ROOT, TERRAFORM_DIR,
-    // ANSIBLE_DIR, K8S_MANIFESTS_DIR, MONITORING_DIR, INVENTORY_FILE, TF_OUTPUT_FILE,
-    // INFRA_CHANGED, TERRAFORM_CHANGED, ANSIBLE_CHANGED, DEPLOY_FRONTEND, DEPLOY_ADMIN,
-    // DEPLOY_BACKEND are intentionally NOT pre-declared here: pre-declaring them in this
-    // block pins their value for the whole run and later env.X reassignments in the
-    // Initialize stage silently fail to reach shell steps in later stages. They are set
-    // as fresh vars in the Initialize stage instead.
+    // Upstream build values, derived paths, and stage flags are intentionally not
+    // pre-declared here. Initialize reads parameters and writes fresh environment values.
   }
 
   stages {
@@ -132,6 +141,17 @@ pipeline {
           def sharedInfra = loadSharedInfra(this)
           def infraSupport = sharedInfra.support
           def sharedConfig = sharedInfra.config ?: [:]
+
+          env.FRONTEND_IMAGE_URI = buildInput(this, 'FRONTEND_IMAGE_URI')
+          env.ADMIN_IMAGE_URI = buildInput(this, 'ADMIN_IMAGE_URI')
+          env.BACKEND_IMAGE_URI = buildInput(this, 'BACKEND_IMAGE_URI')
+          env.IMAGE_TAG = buildInput(this, 'IMAGE_TAG')
+          env.DEPLOY_FRONTEND = buildInput(this, 'DEPLOY_FRONTEND', 'true')
+          env.DEPLOY_ADMIN = buildInput(this, 'DEPLOY_ADMIN', 'true')
+          env.DEPLOY_BACKEND = buildInput(this, 'DEPLOY_BACKEND', 'true')
+          env.RUN_TERRAFORM = buildInput(this, 'RUN_TERRAFORM', 'true')
+          env.RUN_ANSIBLE_AFTER_APPLY = buildInput(this, 'RUN_ANSIBLE_AFTER_APPLY', 'true')
+          env.RUN_DEPLOYMENT = buildInput(this, 'RUN_DEPLOYMENT', 'true')
 
           env.AWS_REGION = env.AWS_REGION
           env.TF_STATE_BUCKET = env.TF_STATE_BUCKET
@@ -250,6 +270,23 @@ pipeline {
           env.DEPLOY_FRONTEND = deployFrontend.toString()
           env.DEPLOY_ADMIN = deployAdmin.toString()
           env.DEPLOY_BACKEND = deployBackend.toString()
+
+          if (env.RUN_DEPLOYMENT == 'true') {
+            def missingImageUris = []
+            if (deployFrontend && !env.FRONTEND_IMAGE_URI?.trim()) {
+              missingImageUris << 'frontend'
+            }
+            if (deployAdmin && !env.ADMIN_IMAGE_URI?.trim()) {
+              missingImageUris << 'admin'
+            }
+            if (deployBackend && !env.BACKEND_IMAGE_URI?.trim()) {
+              missingImageUris << 'backend'
+            }
+            if (!missingImageUris.isEmpty()) {
+              env.RUN_DEPLOYMENT = 'false'
+              echo "No explicit image URI was supplied for ${missingImageUris.join(', ')}; skipping workload deployment. Run the ShopNow build job to build and promote application images."
+            }
+          }
 
           echo "Terraform changed: ${terraformChanged}"
           echo "Ansible changed: ${ansibleChanged}"
