@@ -117,6 +117,7 @@ pipeline {
     SSH_PRIVATE_KEY_CREDENTIALS_ID = 'management-ec2-ssh-key'
     // The Terraform management AMI is Amazon Linux, whose default SSH user is ec2-user.
     REMOTE_USER = 'ec2-user'
+    USER_NAME = 'harish'
     K8S_NAMESPACE = 'shopnow-ns'
     MONITORING_NAMESPACE = 'monitor-ns'
     MONITORING_RELEASE_NAME = 'prometheus'
@@ -160,6 +161,7 @@ pipeline {
           env.LOCK_TABLE = env.LOCK_TABLE
           env.EKS_CLUSTER_NAME = env.EKS_CLUSTER_NAME
           env.REMOTE_USER = env.REMOTE_USER
+          env.USER_NAME = env.USER_NAME
           env.SSH_PRIVATE_KEY_CREDENTIALS_ID = env.SSH_PRIVATE_KEY_CREDENTIALS_ID
           env.IMAGE_TAG = env.IMAGE_TAG
 
@@ -169,6 +171,7 @@ pipeline {
             env.LOCK_TABLE = infraSupport.resolveConfigValue(this, sharedConfig, 'LOCK_TABLE', env.LOCK_TABLE)
             env.EKS_CLUSTER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'EKS_CLUSTER_NAME', env.EKS_CLUSTER_NAME)
             env.REMOTE_USER = infraSupport.resolveConfigValue(this, sharedConfig, 'REMOTE_USER', env.REMOTE_USER)
+            env.USER_NAME = infraSupport.resolveConfigValue(this, sharedConfig, 'USER_NAME', env.USER_NAME)
             env.SSH_PRIVATE_KEY_CREDENTIALS_ID = infraSupport.resolveConfigValue(this, sharedConfig, 'SSH_PRIVATE_KEY_CREDENTIALS_ID', env.SSH_PRIVATE_KEY_CREDENTIALS_ID)
           }
 
@@ -823,7 +826,7 @@ pipeline {
               parallel deployTasks
             }
 
-            sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' ${K8S_MANIFESTS_DIR}/ingress/ingress-shopnow.yaml | kubectl apply -f -"
+            sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_USER_NAME|${USER_NAME}|g' ${K8S_MANIFESTS_DIR}/ingress/ingress-shopnow.yaml | kubectl apply -f -"
 
             sh 'kubectl rollout status deployment/mongo -n ${K8S_NAMESPACE} --timeout=5m'
             if (env.DEPLOY_FRONTEND == 'true') {
