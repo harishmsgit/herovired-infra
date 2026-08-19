@@ -838,7 +838,22 @@ pipeline {
 
             if (env.ENABLE_MONITORING_CHECKS == 'true') {
               sh 'kubectl create namespace ${MONITORING_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -'
-              sh "for file in ${MONITORING_DIR}/*.yaml; do sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' \"\$file\" | kubectl apply -f -; done"
+              // A dashboard ConfigMap is core Kubernetes and is always safe to apply.
+              sh "sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' ${MONITORING_DIR}/grafana-dashboard-shopnow.yaml | kubectl apply -f -"
+
+              // ServiceMonitor and PrometheusRule require the Prometheus Operator. Application rollout
+              // must not fail when that optional monitoring stack is not installed yet.
+              if (sh(script: 'kubectl get crd servicemonitors.monitoring.coreos.com >/dev/null 2>&1', returnStatus: true) == 0) {
+                sh "sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' ${MONITORING_DIR}/service-monitor-shopnow.yaml | kubectl apply -f -"
+              } else {
+                echo 'Prometheus Operator ServiceMonitor CRD is not installed; skipping ServiceMonitor. Install kube-prometheus-stack to enable target scraping.'
+              }
+
+              if (sh(script: 'kubectl get crd prometheusrules.monitoring.coreos.com >/dev/null 2>&1', returnStatus: true) == 0) {
+                sh "sed -e 's|namespace: monitor-ns|namespace: ${MONITORING_NAMESPACE}|g' -e 's|namespace=\"shopnow-ns\"|namespace=\"${K8S_NAMESPACE}\"|g' -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_MONITORING_RELEASE|${MONITORING_RELEASE_NAME}|g' ${MONITORING_DIR}/prometheus-rules-shopnow.yaml | kubectl apply -f -"
+              } else {
+                echo 'Prometheus Operator PrometheusRule CRD is not installed; skipping alert rules. Install kube-prometheus-stack to enable alerts.'
+              }
               sh 'kubectl get pods -n ${MONITORING_NAMESPACE}'
               sh 'kubectl get servicemonitor -n ${MONITORING_NAMESPACE} || true'
               sh 'kubectl get prometheusrule -n ${MONITORING_NAMESPACE} || true'
