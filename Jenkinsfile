@@ -97,9 +97,10 @@ pipeline {
     choice(name: 'DEPLOY_FRONTEND', choices: ['true', 'false'], description: 'Deploy the frontend workload')
     choice(name: 'DEPLOY_ADMIN', choices: ['true', 'false'], description: 'Deploy the admin workload')
     choice(name: 'DEPLOY_BACKEND', choices: ['true', 'false'], description: 'Deploy the backend workload')
-    booleanParam(name: 'RUN_TERRAFORM', defaultValue: true, description: 'Provision or reconcile infrastructure')
-    booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: true, description: 'Run External Secrets and management-host configuration stages')
+    booleanParam(name: 'RUN_TERRAFORM', defaultValue: false, description: 'Provision or reconcile infrastructure (requires explicit approval for infrastructure-only runs)')
+    booleanParam(name: 'RUN_ANSIBLE_AFTER_APPLY', defaultValue: false, description: 'Run External Secrets and management-host configuration stages')
     booleanParam(name: 'RUN_DEPLOYMENT', defaultValue: true, description: 'Deploy workloads when explicit image URIs are supplied')
+    booleanParam(name: 'ALLOW_INFRA_ONLY_RUN', defaultValue: false, description: 'Explicitly allow Terraform/Ansible when no application image URI is supplied')
   }
 
   environment {
@@ -149,9 +150,10 @@ pipeline {
           env.DEPLOY_FRONTEND = buildInput(this, 'DEPLOY_FRONTEND', 'true')
           env.DEPLOY_ADMIN = buildInput(this, 'DEPLOY_ADMIN', 'true')
           env.DEPLOY_BACKEND = buildInput(this, 'DEPLOY_BACKEND', 'true')
-          env.RUN_TERRAFORM = buildInput(this, 'RUN_TERRAFORM', 'true')
-          env.RUN_ANSIBLE_AFTER_APPLY = buildInput(this, 'RUN_ANSIBLE_AFTER_APPLY', 'true')
+          env.RUN_TERRAFORM = buildInput(this, 'RUN_TERRAFORM', 'false')
+          env.RUN_ANSIBLE_AFTER_APPLY = buildInput(this, 'RUN_ANSIBLE_AFTER_APPLY', 'false')
           env.RUN_DEPLOYMENT = buildInput(this, 'RUN_DEPLOYMENT', 'true')
+          env.ALLOW_INFRA_ONLY_RUN = buildInput(this, 'ALLOW_INFRA_ONLY_RUN', 'false')
 
           env.AWS_REGION = env.AWS_REGION
           env.TF_STATE_BUCKET = env.TF_STATE_BUCKET
@@ -270,6 +272,15 @@ pipeline {
           env.DEPLOY_FRONTEND = deployFrontend.toString()
           env.DEPLOY_ADMIN = deployAdmin.toString()
           env.DEPLOY_BACKEND = deployBackend.toString()
+
+          def hasApplicationImage = [env.FRONTEND_IMAGE_URI, env.ADMIN_IMAGE_URI, env.BACKEND_IMAGE_URI].any { it?.trim() }
+          if (!hasApplicationImage && env.ALLOW_INFRA_ONLY_RUN != 'true') {
+            // GitHub webhooks and legacy parameter defaults must never apply infrastructure implicitly.
+            env.RUN_TERRAFORM = 'false'
+            env.RUN_ANSIBLE_AFTER_APPLY = 'false'
+            env.RUN_DEPLOYMENT = 'false'
+            echo 'No application images or infrastructure-only approval supplied; skipping Terraform, Ansible, and workload deployment.'
+          }
 
           if (env.RUN_DEPLOYMENT == 'true') {
             def missingImageUris = []
