@@ -263,6 +263,107 @@ http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/s
 AWS can assign a new address if this load balancer is replaced, so use the
 dynamic command block above as the source of truth after any infrastructure change.
 
+### Application API, order activity, deployment, and infrastructure checks
+
+Run this exact block from the management EC2, Jenkins agent, or an authenticated
+operator workstation. It uses the live ShopNow routes and omits customer PII,
+MongoDB credentials, and Kubernetes secret values.
+
+~~~bash
+# Required once per shell. The management host role has exactly the read and
+# port-forward permissions required by these commands.
+export AWS_REGION=ap-south-1
+export EKS_CLUSTER_NAME=shopnow-app-eks
+export K8S_NAMESPACE=shopnow-ns
+export APP_BASE_PATH=shopnow
+export INGRESS_HOST=a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com
+export SHOPNOW_API_URL="http://${INGRESS_HOST}/${APP_BASE_PATH}/api"
+export KUBECONFIG="$(mktemp)"
+aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME" --kubeconfig "$KUBECONFIG"
+
+echo '=== Application API health and order summary ==='
+curl -fsS "$SHOPNOW_API_URL/health"; echo
+# Shows aggregate order totals only.
+curl -fsS "$SHOPNOW_API_URL/analytics/dashboard" | jq .
+# Shows recent orders without customer name, phone, email, address, or token.
+curl -fsS "$SHOPNOW_API_URL/invoices?limit=10" |
+  jq '{total, currentPage, totalPages, invoices: [.invoices[] | {invoiceNumber, status, paymentStatus, total, createdAt, itemCount: (.items | length)}]}'
+
+echo '=== Backend application logs (startup, database, and errors) ==='
+kubectl logs deployment/backend -n "$K8S_NAMESPACE" --all-containers --tail=200
+
+echo '=== API request evidence at the ingress ==='
+# Recent requests sent to the ShopNow API, including HTTP method and status.
+kubectl logs deployment/ingress-nginx-controller -n ingress-nginx --tail=500 |
+  grep --line-buffered "/${APP_BASE_PATH}/api"
+# Recent real order-create requests. Do not send a test POST: it creates an
+# invoice and decrements stock.
+kubectl logs deployment/ingress-nginx-controller -n ingress-nginx --tail=500 |
+  grep --line-buffered "POST /${APP_BASE_PATH}/api/invoices"
+
+echo '=== Frontend, admin, backend, and Mongo logs ==='
+kubectl logs deployment/frontend -n "$K8S_NAMESPACE" --all-containers --tail=200
+kubectl logs deployment/admin -n "$K8S_NAMESPACE" --all-containers --tail=200
+kubectl logs deployment/mongo -n "$K8S_NAMESPACE" --all-containers --tail=200
+
+echo '=== Deployment rollout and pod diagnosis ==='
+kubectl get deployment frontend admin backend mongo -n "$K8S_NAMESPACE" -o wide
+kubectl rollout status deployment/frontend -n "$K8S_NAMESPACE" --timeout=5m
+kubectl rollout status deployment/admin -n "$K8S_NAMESPACE" --timeout=5m
+kubectl rollout status deployment/backend -n "$K8S_NAMESPACE" --timeout=5m
+kubectl get pods -n "$K8S_NAMESPACE" -l 'app in (frontend,admin,backend,mongo)' -o wide
+kubectl get replicaset -n "$K8S_NAMESPACE" -o wide
+kubectl get events -n "$K8S_NAMESPACE" --sort-by='.lastTimestamp' | tail -n 100
+# Describe the active backend pod and show the previous container log if it restarted.
+export BACKEND_POD="$(kubectl get pods -n "$K8S_NAMESPACE" -l app=backend -o jsonpath='{.items[0].metadata.name}')"
+test -n "$BACKEND_POD" && kubectl describe pod "$BACKEND_POD" -n "$K8S_NAMESPACE"
+test -n "$BACKEND_POD" && kubectl logs "$BACKEND_POD" -n "$K8S_NAMESPACE" --all-containers --previous --tail=200 || true
+
+echo '=== Ingress and AWS infrastructure ==='
+kubectl get ingress -n "$K8S_NAMESPACE" -o wide
+kubectl get service ingress-nginx-controller -n ingress-nginx -o wide
+kubectl get deployment ingress-nginx-controller -n ingress-nginx -o wide
+aws eks describe-cluster --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME" \
+  --query 'cluster.{Status:status,Version:version,Endpoint:endpoint,PublicAccess:resourcesVpcConfig.endpointPublicAccess}' \
+  --output table
+aws eks describe-nodegroup --region "$AWS_REGION" --cluster-name "$EKS_CLUSTER_NAME" --nodegroup-name dev-shopnow-nodes \
+  --query 'nodegroup.{Status:status,Desired:scalingConfig.desiredSize,Min:scalingConfig.minSize,Max:scalingConfig.maxSize,Instances:instanceTypes}' \
+  --output table
+aws eks describe-nodegroup --region "$AWS_REGION" --cluster-name "$EKS_CLUSTER_NAME" --nodegroup-name dev-shopnow-workloads \
+  --query 'nodegroup.{Status:status,Desired:scalingConfig.desiredSize,Min:scalingConfig.minSize,Max:scalingConfig.maxSize,Instances:instanceTypes}' \
+  --output table
+aws elb describe-load-balancers --region "$AWS_REGION" \
+  --load-balancer-names a2d7eee8d8179427fa36d881be68d64a \
+  --query 'LoadBalancerDescriptions[0].{Name:LoadBalancerName,DNS:DNSName,Scheme:Scheme,Subnets:Subnets,Instances:Instances[*].InstanceId}' \
+  --output json
+aws elb describe-instance-health --region "$AWS_REGION" \
+  --load-balancer-name a2d7eee8d8179427fa36d881be68d64a \
+  --query 'InstanceStates[*].{InstanceId:InstanceId,State:State,Reason:ReasonCode,Description:Description}' \
+  --output table
+~~~
+
+Run one of these live streams at a time; each command keeps the terminal open
+until you press `Ctrl+C`:
+
+~~~bash
+# Backend application events and errors.
+kubectl logs -f deployment/backend -n shopnow-ns --all-containers --tail=100
+
+# Every API request through the public gateway.
+kubectl logs -f deployment/ingress-nginx-controller -n ingress-nginx --tail=0 |
+  grep --line-buffered '/shopnow/api'
+
+# Only order placement requests.
+kubectl logs -f deployment/ingress-nginx-controller -n ingress-nginx --tail=0 |
+  grep --line-buffered 'POST /shopnow/api/invoices'
+~~~
+
+The backend currently writes startup, database, and error events to its pod
+logs. Normal API and order-create requests are verified from the NGINX ingress
+access log, while the invoice summary confirms a completed order without
+printing customer information. Add structured backend request/order audit logs
+before relying on pod logs as a full audit trail.
+
 Investigate an unhealthy workload without exposing secrets:
 
 ~~~bash
