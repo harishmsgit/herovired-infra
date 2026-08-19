@@ -9,6 +9,8 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ap-south-1
     permissions:
       contents: read
       packages: write
@@ -20,24 +22,24 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Ensure ECR repository exists
         id: ensure-ecr
         run: |
           REPO_NAME=jenkinsfile-runner
-          ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+          ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com
           REPOSITORY_URI="${ECR_REGISTRY}/${REPO_NAME}"
           echo "Checking for ECR repository $REPO_NAME..."
-          if aws ecr describe-repositories --repository-names "$REPO_NAME" --region ${{ secrets.AWS_REGION }} >/dev/null 2>&1; then
+          if aws ecr describe-repositories --repository-names "$REPO_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
             echo "ECR repository $REPO_NAME already exists"
           else
             echo "ECR repository $REPO_NAME not found — creating..."
-            aws ecr create-repository --repository-name "$REPO_NAME" --region ${{ secrets.AWS_REGION }} || true
+            aws ecr create-repository --repository-name "$REPO_NAME" --region "$AWS_REGION" || true
           fi
 
           echo "registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
@@ -45,7 +47,7 @@ jobs:
 
       - name: Login to ECR
         run: |
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.ensure-ecr.outputs.registry }}
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin ${{ steps.ensure-ecr.outputs.registry }}
 
       - name: Build and push to ECR
         uses: docker/build-push-action@v5
