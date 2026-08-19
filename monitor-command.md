@@ -221,16 +221,16 @@ kubectl rollout status deployment/backend -n "$K8S_NAMESPACE" --timeout=5m
 kubectl get events -n "$K8S_NAMESPACE" --sort-by='.lastTimestamp' | tail -n 100
 
 # Public application access: resolve the actual NGINX/EKS load-balancer address.
-export APP_USER=harish
+export APP_BASE_PATH=shopnow
 export INGRESS_HOST="$(kubectl get ingress shopnow-ingress -n "$K8S_NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
 if [ -z "$INGRESS_HOST" ]; then
   export INGRESS_HOST="$(kubectl get ingress shopnow-ingress -n "$K8S_NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
 fi
 test -n "$INGRESS_HOST" || { echo 'Ingress has no public address yet; run: kubectl get ingress -n shopnow-ns -w'; exit 1; }
 
-export SHOPNOW_FRONTEND_URL="http://${INGRESS_HOST}/${APP_USER}/"
-export SHOPNOW_ADMIN_URL="http://${INGRESS_HOST}/${APP_USER}-admin/"
-export SHOPNOW_API_HEALTH_URL="http://${INGRESS_HOST}/${APP_USER}-api/health"
+export SHOPNOW_FRONTEND_URL="http://${INGRESS_HOST}/${APP_BASE_PATH}/"
+export SHOPNOW_ADMIN_URL="http://${INGRESS_HOST}/${APP_BASE_PATH}/admin/"
+export SHOPNOW_API_HEALTH_URL="http://${INGRESS_HOST}/${APP_BASE_PATH}/api/health"
 printf 'Frontend: %s\nAdmin:    %s\nAPI:      %s\n' "$SHOPNOW_FRONTEND_URL" "$SHOPNOW_ADMIN_URL" "$SHOPNOW_API_HEALTH_URL"
 
 # HTTP 200/3xx verifies the React apps; the API must return JSON with status OK.
@@ -244,9 +244,9 @@ kubectl get servicemonitor,prometheusrule -n "$MONITORING_NAMESPACE" || true
 kubectl get events -n "$MONITORING_NAMESPACE" --sort-by='.lastTimestamp' | tail -n 50
 ~~~
 
-The expected public URLs are `http://<ingress-address>/harish/`,
-`http://<ingress-address>/harish-admin/`, and
-`http://<ingress-address>/harish-api/health`. Use the printed values rather than
+The expected public URLs are `http://<ingress-address>/shopnow/`,
+`http://<ingress-address>/shopnow/admin/`, and
+`http://<ingress-address>/shopnow/api/health`. Use the printed values rather than
 guessing the AWS load-balancer address.
 
 ### Current deployment URLs (19 August 2026)
@@ -255,9 +255,9 @@ The current public load balancer is
 `a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com`:
 
 ~~~text
-http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/harish/
-http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/harish-admin/
-http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/harish-api/health
+http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/shopnow/
+http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/shopnow/admin/
+http://a2d7eee8d8179427fa36d881be68d64a-277526266.ap-south-1.elb.amazonaws.com/shopnow/api/health
 ~~~
 
 AWS can assign a new address if this load balancer is replaced, so use the

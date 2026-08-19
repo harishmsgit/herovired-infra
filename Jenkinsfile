@@ -117,6 +117,8 @@ pipeline {
     SSH_PRIVATE_KEY_CREDENTIALS_ID = 'management-ec2-ssh-key'
     // The Terraform management AMI is Amazon Linux, whose default SSH user is ec2-user.
     REMOTE_USER = 'ec2-user'
+    // One branded public URL hierarchy for the customer portal, admin, and API.
+    APP_BASE_PATH = 'shopnow'
     USER_NAME = 'harish'
     K8S_NAMESPACE = 'shopnow-ns'
     MONITORING_NAMESPACE = 'monitor-ns'
@@ -835,7 +837,7 @@ pipeline {
               parallel deployTasks
             }
 
-            sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_USER_NAME|${USER_NAME}|g' ${K8S_MANIFESTS_DIR}/ingress/ingress-shopnow.yaml | kubectl apply -f -"
+            sh "sed -e 's|namespace: shopnow-ns|namespace: ${K8S_NAMESPACE}|g' -e 's|REPLACE_APP_BASE_PATH|${APP_BASE_PATH}|g' ${K8S_MANIFESTS_DIR}/ingress/ingress-shopnow.yaml | kubectl apply -f -"
 
             sh 'kubectl rollout status deployment/mongo -n ${K8S_NAMESPACE} --timeout=5m'
             if (env.DEPLOY_FRONTEND == 'true') {
