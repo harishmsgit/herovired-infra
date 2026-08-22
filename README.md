@@ -251,6 +251,883 @@ The ingress manifest replaces the configured application base path during deploy
 
 Only the ingress is intended for public traffic. MongoDB stays inside the EKS network and the browser never connects to it directly.
 
+## Complete command reference
+
+Run these commands from the `herovired-infra` repository root.
+
+### Tool and AWS checks
+
+```bash
+aws --version
+terraform version
+ansible --version
+kubectl version --client
+helm version
+docker --version
+jq --version
+
+aws sts get-caller-identity
+aws configure get region
+```
+
+### Static validation
+
+```bash
+terraform -chdir=terraform fmt -check -recursive
+terraform -chdir=terraform init -backend=false
+terraform -chdir=terraform validate
+ansible-playbook --syntax-check ansible/playbooks/configure-management.yml
+ansible-playbook --syntax-check ansible/playbooks/validate-management.yml
+kubectl apply --dry-run=client \
+  -f kubernetes/k8s-manifests/namespace/namespace.yaml
+```
+
+### Terraform workflow
+
+```bash
+cd terraform
+terraform init -reconfigure
+terraform workspace list
+terraform workspace select dev
+terraform fmt -check -recursive
+terraform validate
+terraform plan -out=tfplan
+terraform show tfplan
+terraform apply tfplan
+terraform output
+terraform state list
+cd ..
+```
+
+Review the saved plan before `terraform apply`. Do not commit `.terraform/`, `tfplan`, state files, credentials, or `terraform.tfvars` containing sensitive values.
+
+### Ansible workflow
+
+```bash
+terraform -chdir=terraform output -json > ansible/terraform-outputs.json
+python scripts/generate_ansible_inventory.py \
+  --terraform-output ansible/terraform-outputs.json \
+  --inventory ansible/inventories/generated/hosts.ini
+
+ansible-inventory \
+  -i ansible/inventories/generated/hosts.ini --list
+
+ansible-playbook \
+  -i ansible/inventories/generated/hosts.ini \
+  ansible/playbooks/configure-management.yml --check
+
+ansible-playbook \
+  -i ansible/inventories/generated/hosts.ini \
+  ansible/playbooks/configure-management.yml
+
+ansible-playbook \
+  -i ansible/inventories/generated/hosts.ini \
+  ansible/playbooks/validate-management.yml
+```
+
+### EKS and Kubernetes checks
+
+```bash
+aws eks update-kubeconfig --region ap-south-1 --name shopnow-app-eks
+kubectl cluster-info
+kubectl get nodes -o wide
+kubectl get namespaces
+kubectl get deployment,pod,service,ingress -n shopnow-ns -o wide
+kubectl get events -n shopnow-ns --sort-by=.lastTimestamp
+kubectl get role,rolebinding -n shopnow-ns
+kubectl auth can-i get pods -n shopnow-ns
+kubectl auth can-i get pods/log -n shopnow-ns
+```
+
+### Application rollout and logs
+
+```bash
+kubectl rollout status deployment/backend -n shopnow-ns --timeout=5m
+kubectl rollout status deployment/frontend -n shopnow-ns --timeout=5m
+kubectl rollout status deployment/admin -n shopnow-ns --timeout=5m
+
+kubectl logs -n shopnow-ns deployment/backend --tail=200
+kubectl logs -n shopnow-ns deployment/frontend --tail=100
+kubectl logs -n shopnow-ns deployment/admin --tail=100
+kubectl logs -n shopnow-ns deployment/mongo --tail=200
+```
+
+### Secret status without printing values
+
+```bash
+kubectl get secretstore,externalsecret -n shopnow-ns
+kubectl describe secretstore -n shopnow-ns
+kubectl describe externalsecret mongo-secret -n shopnow-ns
+kubectl get secret mongo-secret -n shopnow-ns \
+  -o jsonpath='{.data.MONGODB_URI}' | wc -c
+
+aws secretsmanager describe-secret \
+  --region ap-south-1 \
+  --secret-id shopnow/mongo \
+  --query '{Name:Name,ARN:ARN,Updated:LastChangedDate}' \
+  --output table
+```
+
+These commands verify that the secret exists without decoding or displaying it.
+
+### MongoDB checks
+
+```bash
+kubectl get deployment,pod,service,endpoints,pvc \
+  -n shopnow-ns -l app=mongo -o wide
+kubectl describe deployment mongo -n shopnow-ns
+kubectl get endpoints mongo -n shopnow-ns
+kubectl exec -n shopnow-ns deployment/mongo -- \
+  mongosh --quiet --eval 'db.adminCommand({ping:1})'
+```
+
+### Monitoring checks
+
+```bash
+kubectl get pods,svc -n monitor-ns -o wide
+kubectl get servicemonitor,prometheusrule -n monitor-ns
+kubectl top nodes
+kubectl top pods -n shopnow-ns
+```
+
+### ECR checks
+
+```bash
+aws ecr describe-repositories \
+  --region ap-south-1 \
+  --query 'repositories[?contains(repositoryName, `shopnow`)].{Name:repositoryName,URI:repositoryUri}' \
+  --output table
+
+aws ecr describe-images \
+  --region ap-south-1 \
+  --repository-name <repository-name> \
+  --query 'imageDetails[*].{Tags:imageTags,Digest:imageDigest,Pushed:imagePushedAt}' \
+  --output table
+```
+
+### Rollback commands
+
+```bash
+kubectl rollout history deployment/backend -n shopnow-ns
+kubectl rollout undo deployment/backend -n shopnow-ns
+kubectl rollout status deployment/backend -n shopnow-ns --timeout=5m
+```
+
+## Access the application through AWS ALB / Load Balancer
+
+### 1. Retrieve the current address
+
+```bash
+export LB_HOST=$(kubectl get service \
+  -n ingress-nginx ingress-nginx-controller \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+echo "$LB_HOST"
+```
+
+PowerShell:
+
+```powershell
+$LB_HOST = kubectl get service `
+  -n ingress-nginx ingress-nginx-controller `
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+
+$LB_HOST
+```
+
+### 2. Access ShopNow
+
+```text
+Customer: http://<LB_HOST>/shopnow/
+Admin:    http://<LB_HOST>/shopnow/admin/
+API:      http://<LB_HOST>/shopnow/api/health
+```
+
+```bash
+curl -I --max-time 15 "http://$LB_HOST/shopnow/"
+curl -I --max-time 15 "http://$LB_HOST/shopnow/admin/"
+curl -fsS --max-time 15 "http://$LB_HOST/shopnow/api/health"
+curl -fsS --max-time 15 "http://$LB_HOST/shopnow/api/products"
+```
+
+### 3. Confirm the complete route
+
+```bash
+kubectl get service -n ingress-nginx ingress-nginx-controller -o wide
+kubectl get ingress -n shopnow-ns -o wide
+kubectl describe ingress -n shopnow-ns
+kubectl get service,endpoints -n shopnow-ns
+kubectl get pods -n shopnow-ns -o wide
+```
+
+Request routing is:
+
+```text
+Browser -> AWS Load Balancer -> Nginx Ingress Controller
+        -> frontend-service:80 -> Customer React application
+        -> admin-service:80    -> Admin React application
+        -> backend-service:5000 -> Express API -> mongo:27017
+```
+
+If the address is pending, watch it with:
+
+```bash
+kubectl get service \
+  -n ingress-nginx ingress-nginx-controller --watch
+```
+
+The current configuration uses a load-balancer Service with Nginx Ingress. AWS chooses the load-balancer type from the Service annotations and cluster configuration. If an Application Load Balancer is required specifically, install the AWS Load Balancer Controller and use an ALB Ingress configuration.
+
+## AWS resource checks
+
+These are read-only commands for confirming the deployed AWS environment.
+
+### Account, region, and EKS
+
+```bash
+aws sts get-caller-identity
+aws configure get region
+
+aws eks describe-cluster \
+  --region ap-south-1 \
+  --name shopnow-app-eks \
+  --query 'cluster.{Name:name,Status:status,Version:version,Endpoint:endpoint,Created:createdAt}' \
+  --output table
+
+aws eks list-nodegroups \
+  --region ap-south-1 \
+  --cluster-name shopnow-app-eks \
+  --output table
+```
+
+### VPC and subnet checks
+
+```bash
+aws ec2 describe-vpcs \
+  --region ap-south-1 \
+  --filters 'Name=tag:Name,Values=*shopnow*' \
+  --query 'Vpcs[*].{Name:Tags[?Key==`Name`]|[0].Value,VpcId:VpcId,CIDR:CidrBlock,State:State}' \
+  --output table
+
+aws ec2 describe-subnets \
+  --region ap-south-1 \
+  --filters 'Name=tag:Name,Values=*shopnow*' \
+  --query 'Subnets[*].{Name:Tags[?Key==`Name`]|[0].Value,SubnetId:SubnetId,AZ:AvailabilityZone,CIDR:CidrBlock,PublicIP:MapPublicIpOnLaunch}' \
+  --output table
+
+aws ec2 describe-security-groups \
+  --region ap-south-1 \
+  --filters 'Name=tag:Name,Values=*shopnow*' \
+  --query 'SecurityGroups[*].{Name:GroupName,Id:GroupId,Vpc:VpcId,Description:Description}' \
+  --output table
+```
+
+### EC2 management-host checks
+
+```bash
+aws ec2 describe-instances \
+  --region ap-south-1 \
+  --filters 'Name=tag:Name,Values=*shopnow*' 'Name=instance-state-name,Values=running,pending,stopped' \
+  --query 'Reservations[].Instances[].{Name:Tags[?Key==`Name`]|[0].Value,Id:InstanceId,State:State.Name,Type:InstanceType,PrivateIP:PrivateIpAddress,PublicIP:PublicIpAddress}' \
+  --output table
+```
+
+### ECR image checks
+
+```bash
+aws ecr describe-repositories \
+  --region ap-south-1 \
+  --query 'repositories[?contains(repositoryName, `shopnow`)].{Name:repositoryName,URI:repositoryUri,Created:createdAt}' \
+  --output table
+
+for REPOSITORY in shopnow-dev-frontend shopnow-dev-admin shopnow-dev-backend; do
+  aws ecr describe-images \
+    --region ap-south-1 \
+    --repository-name "$REPOSITORY" \
+    --query 'sort_by(imageDetails,& imagePushedAt)[-1].{Tags:imageTags,Digest:imageDigest,Pushed:imagePushedAt}' \
+    --output table
+done
+```
+
+### Load-balancer checks
+
+```bash
+# Kubernetes is the most reliable way to obtain the active hostname
+kubectl get service -n ingress-nginx ingress-nginx-controller -o wide
+
+# Application/Network Load Balancers
+aws elbv2 describe-load-balancers \
+  --region ap-south-1 \
+  --query 'LoadBalancers[*].{Name:LoadBalancerName,Type:Type,State:State.Code,DNS:DNSName,Scheme:Scheme}' \
+  --output table
+
+# Classic Load Balancers, when used
+aws elb describe-load-balancers \
+  --region ap-south-1 \
+  --query 'LoadBalancerDescriptions[*].{Name:LoadBalancerName,DNS:DNSName,Scheme:Scheme,VPC:VPCId}' \
+  --output table
+```
+
+## EKS deployment and real-time checks
+
+### Workload status
+
+```bash
+kubectl get deployment,statefulset,daemonset,pod,service,ingress \
+  -n shopnow-ns -o wide
+
+kubectl get pods -n shopnow-ns \
+  -o custom-columns='POD:.metadata.name,READY:.status.containerStatuses[*].ready,STATUS:.status.phase,NODE:.spec.nodeName,RESTARTS:.status.containerStatuses[*].restartCount'
+
+kubectl get endpoints -n shopnow-ns
+kubectl get events -n shopnow-ns --sort-by=.lastTimestamp
+```
+
+### Watch a deployment in real time
+
+```bash
+kubectl get pods -n shopnow-ns --watch
+kubectl get events -n shopnow-ns --watch
+kubectl rollout status deployment/backend -n shopnow-ns --timeout=5m
+kubectl rollout status deployment/frontend -n shopnow-ns --timeout=5m
+kubectl rollout status deployment/admin -n shopnow-ns --timeout=5m
+```
+
+Run each watch command in its own terminal. Stop it with `Ctrl+C`.
+
+### Deployment details
+
+```bash
+kubectl describe deployment backend -n shopnow-ns
+kubectl describe deployment frontend -n shopnow-ns
+kubectl describe deployment admin -n shopnow-ns
+kubectl rollout history deployment/backend -n shopnow-ns
+kubectl get replicasets -n shopnow-ns -o wide
+```
+
+## MongoDB operations and checks
+
+### Deployment, storage, and connectivity
+
+```bash
+kubectl get deployment,pod,service,endpoints,pvc \
+  -n shopnow-ns -l app=mongo -o wide
+kubectl describe deployment mongo -n shopnow-ns
+kubectl describe service mongo -n shopnow-ns
+kubectl get endpoints mongo -n shopnow-ns -o yaml
+kubectl get pvc -n shopnow-ns -o wide
+kubectl get pv -o wide
+```
+
+### Database health
+
+```bash
+kubectl exec -n shopnow-ns deployment/mongo -- \
+  mongosh --quiet --eval 'db.adminCommand({ping:1})'
+
+kubectl exec -n shopnow-ns deployment/mongo -- \
+  mongosh --quiet --eval 'db.version()'
+
+kubectl exec -n shopnow-ns deployment/mongo -- \
+  mongosh --quiet --eval 'db.getMongo().getDBNames()'
+
+kubectl exec -n shopnow-ns deployment/mongo -- \
+  mongosh --quiet --eval 'db.getSiblingDB("shopnow").getCollectionNames()'
+```
+
+### Safe collection counts
+
+```bash
+kubectl exec -n shopnow-ns deployment/mongo -- mongosh --quiet --eval '
+const shopnow = db.getSiblingDB("shopnow");
+shopnow.getCollectionNames().forEach(function(name) {
+  print(name + ": " + shopnow.getCollection(name).countDocuments({}));
+});'
+```
+
+This prints collection names and counts only. Avoid printing customer documents or database credentials into CI logs.
+
+### Temporary local database access
+
+```bash
+kubectl port-forward -n shopnow-ns service/mongo 27017:27017
+```
+
+Keep the command running in one terminal and connect from an approved local MongoDB client. MongoDB remains private unless this temporary port-forward is active.
+
+## Monitoring checks
+
+### Resource status
+
+```bash
+kubectl get pods,service -n monitor-ns -o wide
+kubectl get servicemonitor,prometheusrule -n monitor-ns
+kubectl describe servicemonitor -n monitor-ns
+kubectl describe prometheusrule -n monitor-ns
+kubectl top nodes
+kubectl top pods -n shopnow-ns
+```
+
+### Prometheus and Grafana access
+
+First list the deployed Service names because Helm release names can differ:
+
+```bash
+kubectl get service -n monitor-ns
+```
+
+Then port-forward the matching Services in separate terminals:
+
+```bash
+kubectl port-forward -n monitor-ns service/prometheus-operated 9090:9090
+kubectl port-forward -n monitor-ns service/<grafana-service-name> 3001:80
+```
+
+Open Prometheus at <http://localhost:9090> and Grafana at <http://localhost:3001>.
+
+### Monitoring logs
+
+```bash
+kubectl logs -n monitor-ns \
+  -l app.kubernetes.io/name=prometheus \
+  --all-containers=true --tail=200 --prefix=true
+
+kubectl logs -n monitor-ns \
+  -l app.kubernetes.io/name=grafana \
+  --all-containers=true --tail=200 --prefix=true
+```
+
+## Real-time application and deployment logs
+
+### Application-level logs
+
+```bash
+# Backend API logs from all backend pods
+kubectl logs -f -n shopnow-ns \
+  -l app=backend \
+  --all-containers=true --prefix=true \
+  --tail=100 --max-log-requests=10
+
+# Frontend Nginx logs
+kubectl logs -f -n shopnow-ns \
+  -l app=frontend \
+  --all-containers=true --prefix=true --tail=100
+
+# Admin Nginx logs
+kubectl logs -f -n shopnow-ns \
+  -l app=admin \
+  --all-containers=true --prefix=true --tail=100
+
+# MongoDB logs
+kubectl logs -f -n shopnow-ns \
+  -l app=mongo \
+  --all-containers=true --prefix=true --tail=100
+```
+
+### Nginx ingress request logs
+
+```bash
+# All recent ingress logs
+kubectl logs -f -n ingress-nginx \
+  deployment/ingress-nginx-controller --tail=200
+
+# ShopNow API requests only
+kubectl logs -f -n ingress-nginx \
+  deployment/ingress-nginx-controller --tail=200 | \
+  grep --line-buffered '/shopnow/api'
+
+# HTTP errors for ShopNow routes
+kubectl logs -f -n ingress-nginx \
+  deployment/ingress-nginx-controller --tail=200 | \
+  grep --line-buffered -E '/shopnow/.* (400|401|403|404|500|502|503) '
+```
+
+### Previous crashed-container logs
+
+```bash
+kubectl logs -n shopnow-ns deployment/backend --previous --tail=200
+kubectl logs -n shopnow-ns deployment/mongo --previous --tail=200
+```
+
+### Real-time verification workflow
+
+1. Terminal 1: run backend logs with `kubectl logs -f`.
+2. Terminal 2: run ingress logs filtered for `/shopnow/api`.
+3. Terminal 3: watch namespace events with `kubectl get events -n shopnow-ns --watch`.
+4. Terminal 4: call `http://$LB_HOST/shopnow/api/health` and other API endpoints.
+5. Confirm the request appears in ingress logs, backend logs show no error, and no warning event is created.
+
+## Current setup evidence
+
+The repository POC evidence records the following deployed project shape:
+
+```text
+AWS region:        ap-south-1
+EKS cluster:       shopnow-app-eks
+App namespace:     shopnow-ns
+Monitoring:        monitor-ns
+Public entry:      AWS load balancer -> Nginx Ingress
+Customer service:  frontend-service:80
+Admin service:     admin-service:80
+Backend service:   backend-service:5000
+Database service:  mongo:27017 (cluster-internal)
+Secret source:     AWS Secrets Manager -> External Secrets -> mongo-secret
+```
+
+Cloud resource IDs, IP addresses, pod names, and load-balancer hostnames change over time. Use the commands above to obtain the current values. Do not copy static values from screenshots into automation.
+
+### Live verification result - 22 August 2026
+
+The following result was verified directly with read-only AWS CLI and kubectl commands. Account IDs, node IPs, object IDs, and the load-balancer hostname are intentionally omitted from this README.
+
+```text
+AWS identity:                  authenticated successfully
+AWS region:                    ap-south-1
+EKS cluster:                   shopnow-app-eks
+EKS status:                    ACTIVE
+Kubernetes version:            1.36
+Worker nodes:                  4 Ready
+
+frontend deployment:           1/1 Available
+admin deployment:              1/1 Available
+backend deployment:            1/1 Available
+mongo deployment:              1/1 Available
+External Secrets controller:   1/1 Available
+
+frontend pod:                  Running, 0 restarts
+admin pod:                     Running, 0 restarts
+backend pod:                   Running, 0 restarts
+mongo pod:                     Running, 0 restarts
+
+Customer ingress:              assigned AWS load-balancer hostname
+Admin ingress:                 assigned AWS load-balancer hostname
+API ingress:                   assigned AWS load-balancer hostname
+Customer route:                HTTP 200
+Admin route:                   HTTP 200
+API health route:              HTTP 200, ShopNow API is running
+
+SecretStore aws-secret-store:  Valid, Ready=True
+ExternalSecret mongo-secret:   SecretSynced, Ready=True
+Monitoring namespace:          no resources currently deployed
+```
+
+The live EKS check also showed a public control-plane endpoint allowing `0.0.0.0/0` and disabled control-plane logging. Those settings work for a capstone demonstration but should be restricted and logged before production use.
+
+### Actual AWS and EKS command output
+
+Command:
+
+```bash
+aws eks describe-cluster \
+  --region ap-south-1 \
+  --name shopnow-app-eks \
+  --query 'cluster.{Name:name,Status:status,Version:version}' \
+  --output table
+```
+
+Actual output:
+
+```text
+---------------------------------
+|        DescribeCluster        |
++----------------+--------------+
+| Name           | shopnow-app-eks |
+| Status         | ACTIVE       |
+| Version        | 1.36         |
++----------------+--------------+
+```
+
+Command:
+
+```bash
+kubectl get nodes
+```
+
+Actual output with hostnames and IP addresses removed:
+
+```text
+NAME       STATUS   VERSION
+worker-1   Ready    v1.36.2-eks-254016e
+worker-2   Ready    v1.36.2-eks-254016e
+worker-3   Ready    v1.36.2-eks-254016e
+worker-4   Ready    v1.36.2-eks-254016e
+```
+
+Command:
+
+```bash
+kubectl get deployments -n shopnow-ns
+```
+
+Actual output:
+
+```text
+NAME                               READY   UP-TO-DATE   AVAILABLE
+admin                              1/1     1            1
+backend                            1/1     1            1
+external-secrets                   1/1     1            1
+external-secrets-cert-controller   1/1     1            1
+external-secrets-webhook           1/1     1            1
+frontend                           1/1     1            1
+mongo                              1/1     1            1
+```
+
+Command:
+
+```bash
+kubectl get pods -n shopnow-ns
+```
+
+Actual output with generated pod names shortened:
+
+```text
+NAME                               READY   STATUS    RESTARTS
+admin-*                            1/1     Running   0
+backend-*                          1/1     Running   0
+external-secrets-*                 1/1     Running   0
+external-secrets-cert-controller-* 1/1     Running   0
+external-secrets-webhook-*         1/1     Running   19 (historical)
+frontend-*                         1/1     Running   0
+mongo-*                            1/1     Running   0
+```
+
+Command:
+
+```bash
+kubectl get services -n shopnow-ns
+```
+
+Actual output with cluster IPs removed:
+
+```text
+NAME                       TYPE        PORT(S)
+admin-service              ClusterIP   80/TCP
+backend-service            ClusterIP   5000/TCP
+external-secrets-webhook   ClusterIP   443/TCP
+frontend-service           ClusterIP   80/TCP
+mongo                      ClusterIP   27017/TCP
+```
+
+Command:
+
+```bash
+kubectl get ingress -n shopnow-ns
+```
+
+Actual output with the generated AWS hostname omitted:
+
+```text
+NAME                    CLASS   HOSTS   ADDRESS                 PORTS
+shopnow-admin-ingress   nginx   *       <AWS-LB-HOSTNAME>       80
+shopnow-api-ingress     nginx   *       <AWS-LB-HOSTNAME>       80
+shopnow-ingress         nginx   *       <AWS-LB-HOSTNAME>       80
+```
+
+Command:
+
+```bash
+kubectl get secretstore,externalsecret -n shopnow-ns
+```
+
+Actual output:
+
+```text
+NAME                              STATUS         READY
+SecretStore/aws-secret-store      Valid          True
+ExternalSecret/mongo-secret       SecretSynced   True
+```
+
+Command:
+
+```bash
+kubectl get pods,services -n monitor-ns
+```
+
+Actual output:
+
+```text
+No resources found in monitor-ns namespace.
+```
+
+This output means the monitoring manifests exist in the repository but Prometheus and Grafana are not currently deployed in `monitor-ns`.
+
+Commands:
+
+```bash
+curl -o /dev/null -s -w '%{http_code}\n' "http://$LB_HOST/shopnow/"
+curl -o /dev/null -s -w '%{http_code}\n' "http://$LB_HOST/shopnow/admin/"
+curl -i "http://$LB_HOST/shopnow/api/health"
+```
+
+Actual load-balancer output:
+
+```text
+Customer application: HTTP 200
+Admin application:    HTTP 200
+API health:           HTTP 200
+API response:         {"status":"OK","message":"ShopNow API is running"}
+```
+
+## Customer, admin, API, and operator access
+
+| Access type | Entry point | Kubernetes destination |
+|---|---|---|
+| Customer | `/shopnow/` | `frontend-service:80` |
+| Administrator | `/shopnow/admin/` | `admin-service:80` |
+| REST API | `/shopnow/api/*` | `backend-service:5000` |
+| Database | No public route | `mongo:27017` inside `shopnow-ns` |
+| Operator | AWS IAM + EKS authorization + Kubernetes RBAC | AWS CLI, Jenkins, and kubectl |
+
+Customer and admin traffic enters through the AWS load balancer and Nginx Ingress. Operator access is separate: an AWS IAM identity first authenticates to EKS, then Kubernetes RBAC determines what that identity may do inside the cluster.
+
+The capstone currently uses separate customer/admin paths, not a complete production identity system. Administrative access should be protected with authentication, authorization, TLS, and restricted network exposure before production use.
+
+## AWS Secrets Manager, IAM, IRSA, and Kubernetes secrets
+
+### Secret flow
+
+```text
+AWS Secrets Manager: shopnow/mongo
+  -> IAM policy permits read-only secret access
+  -> IAM role: external-secrets-role
+  -> EKS OIDC trust allows one Kubernetes ServiceAccount
+  -> IRSA gives the External Secrets controller temporary AWS credentials
+  -> SecretStore: aws-secret-store
+  -> ExternalSecret: mongo-secret
+  -> Kubernetes Secret: mongo-secret in shopnow-ns
+  -> Backend and MongoDB pods consume the required keys
+```
+
+No long-lived AWS access key needs to be stored in a pod, Kubernetes Secret, or repository.
+
+### Resources used by this project
+
+| Resource | Current project value | Purpose |
+|---|---|---|
+| AWS secret | `shopnow/mongo` | Stores MongoDB username, password, and connection URI |
+| IAM role | `dev-shopnow-external-secrets-role` | Live role assumed by External Secrets through IRSA |
+| Inline IAM policy | `dev-shopnow-external-secrets-read` | Allows reading only the ShopNow Secrets Manager prefix |
+| EKS identity provider | Cluster OIDC provider | Validates the Kubernetes service-account token |
+| ServiceAccount | `shopnow-external-secrets` in `shopnow-ns` | Live Kubernetes identity trusted by the IAM role |
+| SecretStore | `aws-secret-store` in `shopnow-ns` | Selects Secrets Manager in `ap-south-1` |
+| ExternalSecret | `mongo-secret` in `shopnow-ns` | Maps remote properties to a Kubernetes Secret |
+| Generated Secret | `mongo-secret` in `shopnow-ns` | Runtime values consumed by ShopNow workloads |
+
+### Secret properties synchronized
+
+```text
+MONGO_INITDB_ROOT_USERNAME
+MONGO_INITDB_ROOT_PASSWORD
+MONGODB_URI
+```
+
+The `ExternalSecret` refresh interval is one hour and `creationPolicy: Owner` makes the ExternalSecret controller responsible for the generated Kubernetes Secret.
+
+### What IRSA does
+
+IRSA means IAM Roles for Service Accounts. The EKS cluster publishes an OIDC issuer. The IAM role trust policy permits `sts:AssumeRoleWithWebIdentity` only when the token subject is:
+
+```text
+system:serviceaccount:shopnow-ns:shopnow-external-secrets
+```
+
+AWS STS exchanges that signed service-account token for temporary IAM credentials. The External Secrets controller uses those temporary credentials to call Secrets Manager. Other pods do not automatically receive this role.
+
+### Create the IAM role and policy
+
+```bash
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+scripts/create_iam_role_for_external_secrets.sh \
+  "$AWS_ACCOUNT_ID" \
+  ap-south-1 \
+  shopnow-app-eks \
+  shopnow-ns \
+  shopnow-external-secrets \
+  dev-shopnow-external-secrets-role
+```
+
+The helper creates:
+
+- a trust policy for the EKS OIDC provider and exact ServiceAccount subject;
+- an inline policy for the `shopnow` secret prefix. The live policy permits `secretsmanager:GetSecretValue` and `secretsmanager:DescribeSecret`; the helper script also includes `ListSecrets`, which is broader and is not required by the verified live configuration.
+
+### Annotate the ServiceAccount
+
+```bash
+ROLE_ARN=$(aws iam get-role \
+  --role-name dev-shopnow-external-secrets-role \
+  --query 'Role.Arn' --output text)
+
+kubectl annotate serviceaccount shopnow-external-secrets \
+  -n shopnow-ns \
+  eks.amazonaws.com/role-arn="$ROLE_ARN" \
+  --overwrite
+```
+
+The live External Secrets Deployment uses this annotated ServiceAccount. Confirm the Deployment configuration rather than assuming the annotation alone is sufficient.
+
+### Apply the secret resources
+
+```bash
+kubectl apply -f kubernetes/k8s-manifests/database/aws-secretstore.yaml
+kubectl apply -f kubernetes/k8s-manifests/database/mongo-secret-externalsecret.yaml
+```
+
+The checked-in `external-secrets-sa.yaml` is an older generic example using namespace/name `external-secrets`. The verified Helm deployment instead creates `shopnow-ns/shopnow-external-secrets`; use the live Helm-managed ServiceAccount for the current environment.
+
+### Verify IAM and IRSA
+
+```bash
+aws eks describe-cluster \
+  --region ap-south-1 \
+  --name shopnow-app-eks \
+  --query 'cluster.identity.oidc.issuer' \
+  --output text
+
+aws iam get-role \
+  --role-name dev-shopnow-external-secrets-role \
+  --query 'Role.{Arn:Arn,Trust:AssumeRolePolicyDocument}'
+
+aws iam get-role-policy \
+  --role-name dev-shopnow-external-secrets-role \
+  --policy-name dev-shopnow-external-secrets-read
+
+kubectl get serviceaccount shopnow-external-secrets \
+  -n shopnow-ns -o yaml
+
+kubectl get deployment external-secrets -n shopnow-ns -o \
+  custom-columns='DEPLOYMENT:.metadata.name,SERVICE_ACCOUNT:.spec.template.spec.serviceAccountName'
+```
+
+### Verify synchronization without revealing values
+
+```bash
+aws secretsmanager describe-secret \
+  --region ap-south-1 \
+  --secret-id shopnow/mongo \
+  --query '{Name:Name,ARN:ARN,Updated:LastChangedDate}' \
+  --output table
+
+kubectl get secretstore aws-secret-store -n shopnow-ns
+kubectl get externalsecret mongo-secret -n shopnow-ns
+kubectl describe externalsecret mongo-secret -n shopnow-ns
+kubectl get secret mongo-secret -n shopnow-ns \
+  -o jsonpath='{.data}' | jq 'keys'
+```
+
+Expected key names are `MONGODB_URI`, `MONGO_INITDB_ROOT_USERNAME`, and `MONGO_INITDB_ROOT_PASSWORD`. Do not use `aws secretsmanager get-secret-value`, `kubectl ... | base64 --decode`, or `env` in shared logs because those commands expose secret values.
+
+### Common secret failures
+
+| Symptom | Check |
+|---|---|
+| `SecretStore` authentication error | OIDC provider, role trust policy, ServiceAccount annotation, and controller ServiceAccount name |
+| `AccessDeniedException` | IAM policy actions, secret ARN/prefix, AWS account, and region |
+| `ExternalSecret` reports missing property | Property names in `shopnow/mongo` exactly match the three mapped keys |
+| Kubernetes Secret is absent | ExternalSecret events, operator logs, controller class, and namespace |
+| Pods still use an old value | ExternalSecret refresh status and whether the workload reloads secrets without a restart |
+
 ## Screenshots
 
 ### Infrastructure architecture
