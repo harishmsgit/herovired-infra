@@ -16,6 +16,30 @@ HeroVired Infrastructure is the cloud and DevOps project for [ShopNow](https://g
 
 ## Architecture
 
+### Enterprise AWS architecture
+
+![ShopNow enterprise AWS architecture showing GitHub, Jenkins, AWS networking, EKS, IAM, IRSA, secrets, application traffic, storage, jobs, and monitoring](screenshots/enterprise-aws-architecture.png)
+
+The diagram brings the complete platform into one view:
+
+- Blue paths show customer and administrator traffic entering through the Internet Gateway and AWS load balancer, then reaching Nginx Ingress.
+- Dark paths show private application traffic between frontend, admin, backend, and MongoDB Services.
+- Orange paths show source, build, provisioning, image, and deployment activity. GitHub webhooks trigger Jenkins; Jenkins runs Terraform, Ansible, and Docker build/deployment stages.
+- Green paths show IAM/OIDC/IRSA and Secrets Manager synchronization into `mongo-secret` without storing AWS keys in pods.
+- Purple dotted paths show metrics collection and dashboard/alert processing.
+- Public and private subnet boxes show the intended network boundaries across two availability zones.
+- Dashed optional boxes represent enterprise extensions, not verified current workloads.
+
+Current versus optional scope:
+
+| Status | Components |
+|---|---|
+| Verified current design | GitHub webhook, Jenkins, Terraform, Ansible, ECR, EKS, Nginx Ingress, ShopNow workloads, IAM, OIDC/IRSA, External Secrets, Secrets Manager |
+| Repository capability, not currently deployed | Prometheus, Grafana, alert rules in `monitor-ns` |
+| Optional enterprise extension | GitHub Actions, Lambda, Kubernetes CronJobs/scheduled jobs, dedicated persistent EBS topology |
+
+> GitHub webhook traffic is CI/CD control traffic to Jenkins. Customer and administrator traffic never passes through Jenkins; it enters AWS through the public load-balancer path.
+
 ```text
 GitHub repositories
   -> Jenkins pipeline
@@ -621,28 +645,26 @@ kubectl get pv -o wide
 
 ### Database health
 
+The current MongoDB deployment requires authentication. These commands use credentials already present inside the MongoDB pod and do not print them:
+
 ```bash
-kubectl exec -n shopnow-ns deployment/mongo -- \
-  mongosh --quiet --eval 'db.adminCommand({ping:1})'
-
-kubectl exec -n shopnow-ns deployment/mongo -- \
-  mongosh --quiet --eval 'db.version()'
-
-kubectl exec -n shopnow-ns deployment/mongo -- \
-  mongosh --quiet --eval 'db.getMongo().getDBNames()'
-
-kubectl exec -n shopnow-ns deployment/mongo -- \
-  mongosh --quiet --eval 'db.getSiblingDB("shopnow").getCollectionNames()'
+kubectl exec -n shopnow-ns deployment/mongo -- sh -c \
+  'exec mongosh --quiet \
+  --username "$MONGO_INITDB_ROOT_USERNAME" \
+  --password "$MONGO_INITDB_ROOT_PASSWORD" \
+  --authenticationDatabase admin \
+  --eval "db.adminCommand({ping:1})"'
 ```
 
 ### Safe collection counts
 
 ```bash
-kubectl exec -n shopnow-ns deployment/mongo -- mongosh --quiet --eval '
-const shopnow = db.getSiblingDB("shopnow");
-shopnow.getCollectionNames().forEach(function(name) {
-  print(name + ": " + shopnow.getCollection(name).countDocuments({}));
-});'
+kubectl exec -n shopnow-ns deployment/mongo -- sh -c '
+exec mongosh --quiet \
+  --username "$MONGO_INITDB_ROOT_USERNAME" \
+  --password "$MONGO_INITDB_ROOT_PASSWORD" \
+  --authenticationDatabase admin \
+  --eval "const s=db.getSiblingDB(\"shopnow\"); s.getCollectionNames().forEach(n=>print(n+\": \"+s.getCollection(n).countDocuments({})))"'
 ```
 
 This prints collection names and counts only. Avoid printing customer documents or database credentials into CI logs.
@@ -1127,6 +1149,200 @@ Expected key names are `MONGODB_URI`, `MONGO_INITDB_ROOT_USERNAME`, and `MONGO_I
 | `ExternalSecret` reports missing property | Property names in `shopnow/mongo` exactly match the three mapped keys |
 | Kubernetes Secret is absent | ExternalSecret events, operator logs, controller class, and namespace |
 | Pods still use an old value | ExternalSecret refresh status and whether the workload reloads secrets without a restart |
+
+## Additional operational checks
+
+These commands complete the operational checklist without duplicating commands that already appear above.
+
+### Print all application URLs
+
+```bash
+kubectl get service \
+  -n ingress-nginx \
+  ingress-nginx-controller \
+  -o jsonpath='Load Balancer: http://{.status.loadBalancer.ingress[0].hostname}{"\n"}Customer: http://{.status.loadBalancer.ingress[0].hostname}/shopnow/{"\n"}Admin: http://{.status.loadBalancer.ingress[0].hostname}/shopnow/admin/{"\n"}API health: http://{.status.loadBalancer.ingress[0].hostname}/shopnow/api/health{"\n"}'
+```
+
+Expected output format:
+
+```text
+Load Balancer: http://<AWS-LB-HOSTNAME>
+Customer: http://<AWS-LB-HOSTNAME>/shopnow/
+Admin: http://<AWS-LB-HOSTNAME>/shopnow/admin/
+API health: http://<AWS-LB-HOSTNAME>/shopnow/api/health
+```
+
+### Show ingress path-to-Service mapping
+
+```bash
+kubectl get ingress -n shopnow-ns \
+  -o custom-columns='INGRESS:.metadata.name,PATHS:.spec.rules[*].http.paths[*].path,SERVICE:.spec.rules[*].http.paths[*].backend.service.name,PORT:.spec.rules[*].http.paths[*].backend.service.port.number,ADDRESS:.status.loadBalancer.ingress[*].hostname'
+```
+
+Expected mapping after the deployment replaces the base-path placeholder:
+
+```text
+shopnow-ingress         /shopnow/...         frontend-service   80
+shopnow-admin-ingress   /shopnow/admin/...   admin-service      80
+shopnow-api-ingress     /shopnow/api/...     backend-service    5000
+```
+
+Verified live mapping on 22 August 2026:
+
+```text
+shopnow-ingress         /shopnow(/|$)(.*)         frontend-service
+shopnow-admin-ingress   /shopnow/admin(/|$)(.*)   admin-service
+shopnow-api-ingress     /shopnow/api(/|$)(.*)     backend-service
+```
+
+### Detailed RBAC checks
+
+```bash
+kubectl auth can-i --list -n shopnow-ns
+kubectl auth can-i get pods -n shopnow-ns
+kubectl auth can-i get pods/log -n shopnow-ns
+kubectl auth can-i get services -n shopnow-ns
+kubectl auth can-i get ingress -n shopnow-ns
+kubectl auth can-i create deployments -n shopnow-ns
+kubectl auth can-i delete deployments -n shopnow-ns
+kubectl auth can-i '*' '*' --all-namespaces
+
+kubectl get role,rolebinding -n shopnow-ns -o wide
+kubectl describe role,rolebinding -n shopnow-ns
+```
+
+The final wildcard command should normally return `no` for a least-privilege deployment identity. Run the checks using the same AWS IAM identity or Jenkins role used for deployment.
+
+Verified results for the current operator identity on 22 August 2026:
+
+```text
+get pods:           yes
+get pods/log:       yes
+create deployments: yes
+```
+
+These results describe the current operator identity only. Jenkins and workload ServiceAccounts can have different permissions.
+
+### Secrets Manager metadata and rotation status
+
+```bash
+aws secretsmanager describe-secret \
+  --region ap-south-1 \
+  --secret-id shopnow/mongo \
+  --query '{Name:Name,ARN:ARN,Created:CreatedDate,Updated:LastChangedDate,RotationEnabled:RotationEnabled}' \
+  --output table
+```
+
+This returns metadata only. It does not display the username, password, or MongoDB URI.
+
+Verified current result: the secret exists and has both `AWSCURRENT` and `AWSPREVIOUS` versions. No `RotationEnabled` field was returned, so automatic Secrets Manager rotation is not currently enabled.
+
+### MongoDB version, databases, and collections
+
+```bash
+kubectl exec -n shopnow-ns deployment/mongo -- sh -c '
+exec mongosh --quiet \
+  --username "$MONGO_INITDB_ROOT_USERNAME" \
+  --password "$MONGO_INITDB_ROOT_PASSWORD" \
+  --authenticationDatabase admin \
+  --eval "db.version()"'
+
+kubectl exec -n shopnow-ns deployment/mongo -- sh -c '
+exec mongosh --quiet \
+  --username "$MONGO_INITDB_ROOT_USERNAME" \
+  --password "$MONGO_INITDB_ROOT_PASSWORD" \
+  --authenticationDatabase admin \
+  --eval "db.getSiblingDB(\"shopnow\").getCollectionNames()"'
+
+kubectl exec -n shopnow-ns deployment/mongo -- sh -c '
+exec mongosh --quiet \
+  --username "$MONGO_INITDB_ROOT_USERNAME" \
+  --password "$MONGO_INITDB_ROOT_PASSWORD" \
+  --authenticationDatabase admin \
+  --eval "const s=db.getSiblingDB(\"shopnow\"); s.getCollectionNames().forEach(n=>print(n+\": \"+s.getCollection(n).countDocuments({})))"'
+```
+
+Verified output on 22 August 2026:
+
+```text
+MongoDB version: 7.0.40
+Collections:     invoices, users, products
+invoices:        3
+users:           0
+products:        6
+```
+
+The application collections are `products`, `invoices`, and `users`. Use `invoices`, not `orders`, when inspecting ShopNow data.
+
+Interactive database access:
+
+```bash
+kubectl exec -it -n shopnow-ns deployment/mongo -- sh -c '
+exec mongosh \
+  --username "$MONGO_INITDB_ROOT_USERNAME" \
+  --password "$MONGO_INITDB_ROOT_PASSWORD" \
+  --authenticationDatabase admin'
+```
+
+Then run:
+
+```javascript
+show dbs
+use shopnow
+show collections
+db.products.countDocuments({})
+db.invoices.countDocuments({})
+db.users.countDocuments({})
+db.products.find().limit(5)
+```
+
+Avoid printing user or invoice documents in shared terminals, screenshots, Jenkins output, or support tickets because they may contain personal information.
+
+### Ingress success and error filters
+
+Recent ShopNow ingress activity:
+
+```bash
+kubectl logs -n ingress-nginx \
+  deployment/ingress-nginx-controller --tail=200 | \
+  grep -E 'shopnow|static|200|404|500|502|503'
+```
+
+Successful ShopNow requests:
+
+```bash
+kubectl logs -n ingress-nginx \
+  deployment/ingress-nginx-controller --tail=200 | \
+  grep -E 'shopnow|static|200'
+```
+
+ShopNow routing or server errors:
+
+```bash
+kubectl logs -n ingress-nginx \
+  deployment/ingress-nginx-controller --tail=200 | \
+  grep -E 'shopnow|static|404|500|502|503'
+```
+
+For live API traffic:
+
+```bash
+kubectl logs -f -n ingress-nginx \
+  deployment/ingress-nginx-controller --tail=100 | \
+  grep --line-buffered '/shopnow/api'
+```
+
+### Safe-command rule
+
+Do not add these commands to public documentation or shared logs:
+
+```text
+aws secretsmanager get-secret-value ... --query SecretString
+kubectl get secret ... MONGODB_URI | base64 --decode
+printenv, env, or echo commands that reveal database credentials
+```
+
+Use `describe-secret`, ExternalSecret readiness, key-name checks, and value-length checks instead.
 
 ## Screenshots
 
