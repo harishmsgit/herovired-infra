@@ -7,20 +7,29 @@ set -euo pipefail
 SECRET_NAME=${1:-shopnow/mongo}
 REGION=${2:-ap-south-1}
 
-cat > /tmp/mongo-secret.json <<EOF
-{
-  "MONGO_INITDB_ROOT_USERNAME": "shopuser",
-  "MONGO_INITDB_ROOT_PASSWORD": "ShopNowPass123",
-  "MONGODB_URI": "mongodb://shopuser:ShopNowPass123@mongo:27017/shopnow?authSource=admin"
-}
-EOF
+: "${MONGO_INITDB_ROOT_USERNAME:?Set MONGO_INITDB_ROOT_USERNAME before running this script}"
+: "${MONGO_INITDB_ROOT_PASSWORD:?Set MONGO_INITDB_ROOT_PASSWORD before running this script}"
+: "${MONGODB_URI:?Set MONGODB_URI before running this script}"
+
+SECRET_FILE=$(mktemp)
+trap 'rm -f "$SECRET_FILE"' EXIT
+
+jq -n \
+  --arg username "$MONGO_INITDB_ROOT_USERNAME" \
+  --arg password "$MONGO_INITDB_ROOT_PASSWORD" \
+  --arg uri "$MONGODB_URI" \
+  '{
+    MONGO_INITDB_ROOT_USERNAME: $username,
+    MONGO_INITDB_ROOT_PASSWORD: $password,
+    MONGODB_URI: $uri
+  }' > "$SECRET_FILE"
 
 if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" >/dev/null 2>&1; then
   echo "Updating existing secret ${SECRET_NAME} in ${REGION}..."
-  aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --secret-string file:///tmp/mongo-secret.json
+  aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --secret-string "file://${SECRET_FILE}"
 else
   echo "Creating secret ${SECRET_NAME} in ${REGION}..."
-  aws secretsmanager create-secret --name "$SECRET_NAME" --region "$REGION" --secret-string file:///tmp/mongo-secret.json
+  aws secretsmanager create-secret --name "$SECRET_NAME" --region "$REGION" --secret-string "file://${SECRET_FILE}"
 fi
 
 echo "Secret ${SECRET_NAME} created/updated in ${REGION}."
