@@ -1,5 +1,7 @@
 # HeroVired Infrastructure
 
+> Rebuild and teardown procedure: [setup-destroy-env.md](setup-destroy-env.md)
+
 HeroVired Infrastructure is the cloud and DevOps project for [ShopNow](https://github.com/harishmsgit/shopNow). It creates the AWS environment, configures the management host, deploys ShopNow to Kubernetes, synchronizes database secrets, and monitors the application.
 
 ## Project at a glance
